@@ -289,18 +289,19 @@ impl MergeApp {
             });
     }
 
-    fn show_input_card(&mut self, ui: &mut egui::Ui) {
+    fn show_input_card(&mut self, ui: &mut egui::Ui, panel_height: f32) {
         card(ui, |ui| {
+            ui.set_min_height((panel_height - 42.0).max(180.0));
             section_title(ui, "1  选择数据源", "可拖入文件或文件夹；文件夹会递归扫描");
             ui.add_space(14.0);
             ui.horizontal(|ui| {
                 let enabled = !self.busy();
-                if ui.add_enabled(enabled, primary_button("选择文件夹", 126.0)).clicked() {
+                if ui.add_enabled(enabled, primary_button("选择文件夹", 116.0)).clicked() {
                     if let Some(folder) = FileDialog::new().pick_folder() {
                         self.start_folder_scan(folder);
                     }
                 }
-                if ui.add_enabled(enabled, secondary_button("选择多个文件", 138.0)).clicked() {
+                if ui.add_enabled(enabled, secondary_button("选择多个文件", 126.0)).clicked() {
                     if let Some(paths) = FileDialog::new()
                         .add_filter("表格文件", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"])
                         .pick_files()
@@ -308,12 +309,12 @@ impl MergeApp {
                         self.start_files_scan(paths);
                     }
                 }
-                ui.add_space(8.0);
-                ui.label(RichText::new(&self.input_label).size(13.0).color(MUTED));
             });
+            ui.add_space(7.0);
+            ui.label(RichText::new(&self.input_label).size(12.0).color(MUTED));
 
             if !self.sources.is_empty() {
-                ui.add_space(16.0);
+                ui.add_space(12.0);
                 let selected = self.sources.iter().filter(|table| table.enabled).count();
                 ui.horizontal(|ui| {
                     ui.label(
@@ -335,88 +336,111 @@ impl MergeApp {
                     });
                 });
                 ui.add_space(8.0);
-                egui::ScrollArea::vertical().max_height(190.0).show(ui, |ui| {
-                    egui::Grid::new("source_grid")
-                        .num_columns(5)
-                        .striped(true)
-                        .spacing([16.0, 8.0])
-                        .show(ui, |ui| {
-                            ui.label(RichText::new("使用").strong().color(MUTED));
-                            ui.label(RichText::new("文件").strong().color(MUTED));
-                            ui.label(RichText::new("Sheet").strong().color(MUTED));
-                            ui.label(RichText::new("数据行").strong().color(MUTED));
-                            ui.label(RichText::new("列数").strong().color(MUTED));
-                            ui.end_row();
-                            for table in &mut self.sources {
-                                ui.checkbox(&mut table.enabled, "");
-                                let file = table
-                                    .path
-                                    .file_name()
-                                    .map(|v| v.to_string_lossy())
-                                    .unwrap_or_default();
-                                ui.label(file.as_ref()).on_hover_text(table.path.display().to_string());
-                                ui.label(&table.sheet_name);
-                                ui.label(format_number(table.estimated_rows));
-                                ui.label(table.headers.len().to_string());
-                                ui.end_row();
-                            }
-                        });
-                });
+                let list_height = (panel_height - 205.0).max(90.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("source_tables_scroll")
+                    .max_height(list_height)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (index, table) in self.sources.iter_mut().enumerate() {
+                            let fill = if index % 2 == 0 {
+                                Color32::from_rgb(248, 250, 252)
+                            } else {
+                                Color32::WHITE
+                            };
+                            egui::Frame::new()
+                                .fill(fill)
+                                .corner_radius(7.0)
+                                .inner_margin(9.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.checkbox(&mut table.enabled, "");
+                                        let file = table
+                                            .path
+                                            .file_name()
+                                            .map(|v| v.to_string_lossy())
+                                            .unwrap_or_default();
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                RichText::new(file.as_ref()).strong().color(TEXT),
+                                            )
+                                            .on_hover_text(table.path.display().to_string());
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{}  ·  {} 行  ·  {} 列",
+                                                    table.sheet_name,
+                                                    format_number(table.estimated_rows),
+                                                    table.headers.len()
+                                                ))
+                                                .size(11.0)
+                                                .color(MUTED),
+                                            );
+                                        });
+                                    });
+                                });
+                        }
+                    });
             }
         });
     }
 
-    fn show_rules_card(&mut self, ui: &mut egui::Ui) {
+    fn show_rules_card(&mut self, ui: &mut egui::Ui, panel_height: f32) {
         card(ui, |ui| {
+            ui.set_min_height((panel_height - 42.0).max(180.0));
             section_title(ui, "2  设置合并规则", "表头匹配不区分大小写，并会自动去除首尾空格");
             ui.add_space(14.0);
             ui.horizontal(|ui| {
-                mode_button(ui, &mut self.mode, MergeMode::Union, "并集", "保留所有列");
-                mode_button(ui, &mut self.mode, MergeMode::Intersection, "交集", "只保留共有列");
-                mode_button(ui, &mut self.mode, MergeMode::Manual, "手动映射", "不同列名拼成一列");
+                ui.selectable_value(&mut self.mode, MergeMode::Union, "并集");
+                ui.selectable_value(&mut self.mode, MergeMode::Intersection, "交集");
+                ui.selectable_value(&mut self.mode, MergeMode::Manual, "手动映射");
             });
+            let mode_help = match self.mode {
+                MergeMode::Union => "保留所有数据表中出现过的列",
+                MergeMode::Intersection => "只保留所有数据表共有的列",
+                MergeMode::Manual => "把不同列名映射到同一个目标列",
+            };
+            ui.label(RichText::new(mode_help).size(11.0).color(MUTED));
             ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.include_source_file, "追加“来源文件”列");
-                ui.add_space(16.0);
-                ui.checkbox(&mut self.include_source_sheet, "追加“来源工作表”列");
-            });
+            ui.checkbox(&mut self.include_source_file, "追加“来源文件”列");
+            ui.checkbox(&mut self.include_source_sheet, "追加“来源工作表”列");
 
             if self.mode == MergeMode::Manual && !self.sources.is_empty() {
-                ui.add_space(16.0);
+                ui.add_space(10.0);
                 ui.separator();
-                ui.add_space(12.0);
-                self.show_manual_mapping(ui);
+                ui.add_space(8.0);
+                self.show_manual_mapping(ui, (panel_height - 265.0).max(90.0));
             }
         });
     }
 
-    fn show_manual_mapping(&mut self, ui: &mut egui::Ui) {
+    fn show_manual_mapping(&mut self, ui: &mut egui::Ui, mapping_height: f32) {
         self.selected_mapping_table = self
             .selected_mapping_table
             .min(self.sources.len().saturating_sub(1));
         ui.horizontal(|ui| {
             ui.label(RichText::new("当前数据表").strong().color(TEXT));
-            egui::ComboBox::from_id_salt("mapping_table")
-                .width(360.0)
-                .selected_text(self.sources[self.selected_mapping_table].display_name())
-                .show_ui(ui, |ui| {
-                    for (index, table) in self.sources.iter().enumerate() {
-                        ui.selectable_value(
-                            &mut self.selected_mapping_table,
-                            index,
-                            table.display_name(),
-                        );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.small_button("恢复本表默认").clicked() {
+                    let table = &mut self.sources[self.selected_mapping_table];
+                    for mapping in &mut table.mappings {
+                        mapping.target_name = mapping.source_name.clone();
+                        mapping.enabled = true;
                     }
-                });
-            if ui.small_button("恢复本表默认").clicked() {
-                let table = &mut self.sources[self.selected_mapping_table];
-                for mapping in &mut table.mappings {
-                    mapping.target_name = mapping.source_name.clone();
-                    mapping.enabled = true;
                 }
-            }
+            });
         });
+        egui::ComboBox::from_id_salt("mapping_table")
+            .width(ui.available_width())
+            .selected_text(self.sources[self.selected_mapping_table].display_name())
+            .show_ui(ui, |ui| {
+                for (index, table) in self.sources.iter().enumerate() {
+                    ui.selectable_value(
+                        &mut self.selected_mapping_table,
+                        index,
+                        table.display_name(),
+                    );
+                }
+            });
         ui.add_space(6.0);
         ui.label(
             RichText::new("把不同表的列填写为相同“目标列名”，它们就会合并到同一列。")
@@ -425,34 +449,38 @@ impl MergeApp {
         );
         ui.add_space(8.0);
         let table = &mut self.sources[self.selected_mapping_table];
-        egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-            egui::Grid::new("mapping_grid")
-                .num_columns(4)
-                .striped(true)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    ui.label(RichText::new("使用").strong().color(MUTED));
-                    ui.label(RichText::new("源列").strong().color(MUTED));
-                    ui.label("");
-                    ui.label(RichText::new("目标列名").strong().color(MUTED));
-                    ui.end_row();
-                    for mapping in &mut table.mappings {
-                        ui.checkbox(&mut mapping.enabled, "");
-                        ui.label(&mapping.source_name);
-                        ui.label(RichText::new("→").color(BLUE));
-                        ui.add_enabled(
-                            mapping.enabled,
-                            egui::TextEdit::singleline(&mut mapping.target_name)
-                                .desired_width(260.0)
-                                .hint_text("留空则不输出"),
-                        );
-                        ui.end_row();
-                    }
-                });
-        });
+        egui::ScrollArea::vertical()
+            .id_salt(("manual_mapping_scroll", self.selected_mapping_table))
+            .max_height(mapping_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (index, mapping) in table.mappings.iter_mut().enumerate() {
+                    let fill = if index % 2 == 0 {
+                        Color32::from_rgb(248, 250, 252)
+                    } else {
+                        Color32::WHITE
+                    };
+                    egui::Frame::new()
+                        .fill(fill)
+                        .corner_radius(7.0)
+                        .inner_margin(9.0)
+                        .show(ui, |ui| {
+                            ui.checkbox(&mut mapping.enabled, &mapping.source_name);
+                            ui.add_space(3.0);
+                            ui.label(RichText::new("映射到").size(11.0).color(MUTED));
+                            let edit_width = ui.available_width();
+                            ui.add_enabled(
+                                mapping.enabled,
+                                egui::TextEdit::singleline(&mut mapping.target_name)
+                                    .desired_width(edit_width)
+                                    .hint_text("留空则不输出"),
+                            );
+                        });
+                }
+            });
     }
 
-    fn show_output_card(&mut self, ui: &mut egui::Ui) {
+    fn show_output_panel(&mut self, ctx: &egui::Context) {
         let options = MergeOptions {
             mode: self.mode,
             include_source_file: self.include_source_file,
@@ -467,98 +495,113 @@ impl MergeApp {
             .sum();
         let expected_sheets = ((rows.max(1) - 1) / XLSX_MAX_DATA_ROWS as u64) + 1;
 
-        card(ui, |ui| {
-            section_title(ui, "3  导出结果", "输出为标准 XLSX；超出行数限制时自动续写到新 Sheet");
-            ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("输出位置").strong().color(TEXT));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.output_path)
-                        .desired_width(500.0)
-                        .hint_text("请选择输出文件"),
-                );
-                if ui.add_enabled(!self.busy(), secondary_button("浏览…", 84.0)).clicked() {
-                    if let Some(path) = FileDialog::new()
-                        .add_filter("Excel 工作簿", &["xlsx"])
-                        .set_file_name("合并结果.xlsx")
-                        .save_file()
+        egui::TopBottomPanel::bottom("output_panel")
+            .exact_height(202.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::WHITE)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .inner_margin(16.0),
+            )
+            .show(ctx, |ui| {
+                section_title(ui, "3  导出结果", "固定操作区，无需滚动页面即可开始合并");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("输出位置").strong().color(TEXT));
+                    let path_width = (ui.available_width() - 105.0).max(180.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.output_path)
+                            .desired_width(path_width)
+                            .hint_text("请选择输出文件"),
+                    );
+                    if ui
+                        .add_enabled(!self.busy(), secondary_button("浏览…", 84.0))
+                        .clicked()
                     {
-                        self.output_path = path.display().to_string();
+                        if let Some(path) = FileDialog::new()
+                            .add_filter("Excel 工作簿", &["xlsx"])
+                            .set_file_name("合并结果.xlsx")
+                            .save_file()
+                        {
+                            self.output_path = path.display().to_string();
+                        }
                     }
-                }
-            });
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                metric(ui, "预计数据行", &format_number(rows));
-                metric(ui, "输出列", &plan.headers.len().to_string());
-                metric(ui, "预计 Sheet", &expected_sheets.to_string());
-            });
-
-            if self.busy() || !self.progress_label.is_empty() {
-                ui.add_space(14.0);
-                ui.add(
-                    egui::ProgressBar::new(self.progress.clamp(0.0, 1.0))
-                        .animate(self.busy())
-                        .show_percentage(),
-                );
-                ui.add_space(5.0);
-                ui.label(RichText::new(&self.progress_label).size(12.0).color(MUTED));
-            }
-
-            if !self.warnings.is_empty() {
-                ui.add_space(10.0);
-                egui::CollapsingHeader::new(format!("{} 个文件或工作表未能读取", self.warnings.len()))
-                    .show(ui, |ui| {
-                        for warning in &self.warnings {
-                            ui.label(RichText::new(warning).size(12.0).color(Color32::DARK_RED));
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    compact_metric(ui, "预计行", &format_number(rows));
+                    ui.separator();
+                    compact_metric(ui, "输出列", &plan.headers.len().to_string());
+                    ui.separator();
+                    compact_metric(ui, "Sheet", &expected_sheets.to_string());
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let can_start = !self.busy()
+                            && self.sources.iter().any(|table| table.enabled)
+                            && !plan.headers.is_empty();
+                        if ui
+                            .add_enabled(can_start, primary_button("开始合并", 150.0))
+                            .clicked()
+                        {
+                            self.start_merge();
+                        }
+                        if matches!(self.state, AppState::Merging)
+                            && ui.add(secondary_button("取消", 80.0)).clicked()
+                        {
+                            self.cancel.store(true, Ordering::Relaxed);
+                            self.progress_label = "正在取消…".to_owned();
                         }
                     });
-            }
+                });
 
-            match &self.state {
-                AppState::Done { output, rows, sheets } => {
-                    ui.add_space(12.0);
-                    egui::Frame::new().fill(Color32::from_rgb(240, 253, 244)).inner_margin(12.0).show(ui, |ui| {
+                if self.busy() || !self.progress_label.is_empty() {
+                    ui.add_space(8.0);
+                    ui.add(
+                        egui::ProgressBar::new(self.progress.clamp(0.0, 1.0))
+                            .animate(self.busy())
+                            .show_percentage(),
+                    );
+                    ui.add_space(3.0);
+                }
+
+                match &self.state {
+                    AppState::Done { output, rows, sheets } => {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("合并成功：{} 行，{} 个 Sheet", format_number(*rows), sheets)).strong().color(Color32::from_rgb(22, 101, 52)));
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.button("在文件夹中显示").clicked() {
-                                    reveal_in_explorer(output);
-                                }
-                            });
+                            ui.label(
+                                RichText::new(format!(
+                                    "合并成功：{} 行，{} 个 Sheet",
+                                    format_number(*rows),
+                                    sheets
+                                ))
+                                .strong()
+                                .color(Color32::from_rgb(22, 101, 52)),
+                            );
+                            if ui.small_button("在文件夹中显示").clicked() {
+                                reveal_in_explorer(output);
+                            }
                         });
-                    });
-                }
-                AppState::Error(message) => {
-                    ui.add_space(12.0);
-                    egui::Frame::new().fill(Color32::from_rgb(254, 242, 242)).inner_margin(12.0).show(ui, |ui| {
-                        ui.label(RichText::new(message).color(Color32::from_rgb(153, 27, 27)));
-                    });
-                }
-                _ => {}
-            }
-
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                let can_start = !self.busy()
-                    && self.sources.iter().any(|table| table.enabled)
-                    && !plan.headers.is_empty();
-                if ui.add_enabled(can_start, primary_button("开始合并", 150.0)).clicked() {
-                    self.start_merge();
-                }
-                if matches!(self.state, AppState::Merging) {
-                    if ui.add(secondary_button("取消", 90.0)).clicked() {
-                        self.cancel.store(true, Ordering::Relaxed);
-                        self.progress_label = "正在取消…".to_owned();
+                    }
+                    AppState::Error(message) => {
+                        ui.label(
+                            RichText::new(message).color(Color32::from_rgb(153, 27, 27)),
+                        );
+                    }
+                    _ if !self.progress_label.is_empty() => {
+                        ui.label(RichText::new(&self.progress_label).size(12.0).color(MUTED));
+                    }
+                    _ => {
+                        let warning = if self.warnings.is_empty() {
+                            format!("当前模式：{}", self.mode.label())
+                        } else {
+                            format!(
+                                "{} 个文件或工作表未能读取 · 当前模式：{}",
+                                self.warnings.len(),
+                                self.mode.label()
+                            )
+                        };
+                        ui.label(RichText::new(warning).size(12.0).color(MUTED));
                     }
                 }
-                ui.label(
-                    RichText::new(format!("当前模式：{}", self.mode.label()))
-                        .size(12.0)
-                        .color(MUTED),
-                );
             });
-        });
     }
 }
 
@@ -567,17 +610,15 @@ impl eframe::App for MergeApp {
         self.poll_workers(ctx);
         self.handle_dropped_files(ctx);
         self.show_header(ctx);
+        self.show_output_panel(ctx);
         self.show_sidebar(ctx);
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(Color32::from_rgb(241, 245, 249)).inner_margin(22.0))
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.show_input_card(ui);
-                    ui.add_space(14.0);
-                    self.show_rules_card(ui);
-                    ui.add_space(14.0);
-                    self.show_output_card(ui);
-                    ui.add_space(12.0);
+                let panel_height = ui.available_height();
+                ui.columns(2, |columns| {
+                    self.show_input_card(&mut columns[0], panel_height);
+                    self.show_rules_card(&mut columns[1], panel_height);
                 });
             });
     }
@@ -657,35 +698,9 @@ fn step(ui: &mut egui::Ui, number: &str, label: &str, complete: bool) {
     ui.add_space(14.0);
 }
 
-fn mode_button(ui: &mut egui::Ui, current: &mut MergeMode, value: MergeMode, title: &str, detail: &str) {
-    let selected = *current == value;
-    let fill = if selected { SOFT_BLUE } else { Color32::WHITE };
-    let stroke = if selected { Stroke::new(1.5, BLUE) } else { Stroke::new(1.0, BORDER) };
-    let response = egui::Frame::new()
-        .fill(fill)
-        .stroke(stroke)
-        .corner_radius(9.0)
-        .inner_margin(12.0)
-        .show(ui, |ui| {
-            ui.set_min_width(154.0);
-            ui.vertical(|ui| {
-                ui.label(RichText::new(title).strong().color(if selected { BLUE_DARK } else { TEXT }));
-                ui.label(RichText::new(detail).size(11.0).color(MUTED));
-            });
-        })
-        .response
-        .interact(egui::Sense::click());
-    if response.clicked() {
-        *current = value;
-    }
-}
-
-fn metric(ui: &mut egui::Ui, label: &str, value: &str) {
-    egui::Frame::new().fill(Color32::from_rgb(248, 250, 252)).corner_radius(8.0).inner_margin(12.0).show(ui, |ui| {
-        ui.set_min_width(135.0);
-        ui.label(RichText::new(label).size(11.0).color(MUTED));
-        ui.label(RichText::new(value).size(18.0).strong().color(TEXT));
-    });
+fn compact_metric(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.label(RichText::new(label).size(11.0).color(MUTED));
+    ui.label(RichText::new(value).strong().color(TEXT));
 }
 
 fn primary_button(label: &str, width: f32) -> egui::Button<'_> {
