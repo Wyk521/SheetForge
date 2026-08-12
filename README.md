@@ -2,6 +2,10 @@
 
 一个面向 Windows 的轻量原生 GUI 工具，用来批量合并 Excel / CSV 数据。使用 Rust 开发，不依赖 Python，不上传数据。
 
+## 下载 Windows 成品
+
+从 [Releases](https://github.com/Wyk521/SheetForge/releases/latest) 下载 `SheetForge-Windows-x64.zip`，解压后直接运行 `SheetForge.exe`。
+
 ## 已实现功能
 
 - 递归扫描文件夹，也支持多选文件和拖放。
