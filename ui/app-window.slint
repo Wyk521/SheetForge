@@ -293,7 +293,7 @@ export component AppWindow inherits Window {
                                 width: source-list.width - 4px;
                                 height: 76px;
                                 border-radius: 9px;
-                                background: index % 2 == 0 ? #f8fafc : #ffffff;
+                                background: Math.mod(index, 2) == 0 ? #f8fafc : #ffffff;
                                 border-width: 1px;
                                 border-color: source.enabled ? #dbeafe : #eef2f7;
                                 HorizontalLayout {
@@ -482,7 +482,7 @@ export component AppWindow inherits Window {
                                     width: mapping-list.width - 4px;
                                     height: 68px;
                                     border-radius: 9px;
-                                    background: index % 2 == 0 ? #f8fafc : #ffffff;
+                                    background: Math.mod(index, 2) == 0 ? #f8fafc : #ffffff;
                                     border-width: 1px;
                                     border-color: #eef2f7;
                                     HorizontalLayout {
