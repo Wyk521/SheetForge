@@ -37,6 +37,7 @@ pub struct SourceTable {
     pub path: PathBuf,
     pub sheet_name: String,
     pub kind: SourceKind,
+    pub header_row: usize,
     pub headers: Vec<String>,
     pub estimated_rows: u64,
     pub enabled: bool,
@@ -131,6 +132,20 @@ pub fn build_output_plan(tables: &[SourceTable], options: &MergeOptions) -> Outp
         source_file_column,
         source_sheet_column,
     }
+}
+
+pub fn common_header_keys(tables: &[SourceTable]) -> HashSet<String> {
+    let enabled: Vec<&SourceTable> = tables.iter().filter(|table| table.enabled).collect();
+    if enabled.len() < 2 {
+        return HashSet::new();
+    }
+    let first = enabled[0];
+    let mut common: HashSet<String> = first.headers.iter().map(|h| header_key(h)).collect();
+    for table in enabled.iter().skip(1) {
+        let current: HashSet<String> = table.headers.iter().map(|h| header_key(h)).collect();
+        common.retain(|key| current.contains(key));
+    }
+    common
 }
 
 fn union_headers(tables: &[&SourceTable]) -> Vec<String> {
@@ -241,6 +256,7 @@ mod tests {
             path: PathBuf::from("a.csv"),
             sheet_name: "CSV".to_owned(),
             kind: SourceKind::Csv { delimiter: b',' },
+            header_row: 1,
             mappings: make_default_mappings(&headers),
             headers,
             estimated_rows: 0,
@@ -277,6 +293,21 @@ mod tests {
         );
         assert_eq!(union.headers, vec!["姓名", "年龄", "城市"]);
         assert_eq!(intersection.headers, vec!["姓名"]);
+    }
+
+    #[test]
+    fn manual_defaults_to_union_and_common_headers_are_detected() {
+        let tables = vec![table(&["姓名", "手机号"]), table(&["姓名", "联系电话"])];
+        let manual = build_output_plan(
+            &tables,
+            &MergeOptions {
+                mode: MergeMode::Manual,
+                include_source_file: false,
+                include_source_sheet: false,
+            },
+        );
+        assert_eq!(manual.headers, vec!["姓名", "手机号", "联系电话"]);
+        assert_eq!(common_header_keys(&tables), HashSet::from(["姓名".to_owned()]));
     }
 
     #[test]

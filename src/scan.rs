@@ -13,6 +13,8 @@ use walkdir::WalkDir;
 pub enum ScanEvent {
     Progress { done: usize, total: usize, name: String },
     Finished { tables: Vec<SourceTable>, warnings: Vec<String> },
+    TableReloaded { index: usize, table: SourceTable },
+    TableReloadFailed { index: usize, message: String },
     Failed(String),
 }
 
@@ -82,13 +84,34 @@ pub fn scan_file(path: &Path) -> Result<Vec<SourceTable>> {
         .map(|ext| ext.to_ascii_lowercase())
         .as_deref()
     {
-        Some("csv" | "tsv") => scan_csv(path).map(|table| vec![table]),
-        Some("xlsx" | "xlsm" | "xls" | "xlsb" | "ods") => scan_workbook(path),
+        Some("csv" | "tsv") => scan_csv(path, 1).map(|table| vec![table]),
+        Some("xlsx" | "xlsm" | "xls" | "xlsb" | "ods") => scan_workbook(path, 1),
         _ => Ok(Vec::new()),
     }
 }
 
-fn scan_csv(path: &Path) -> Result<SourceTable> {
+pub fn spawn_table_reload(index: usize, source: SourceTable, header_row: usize, tx: Sender<ScanEvent>) {
+    std::thread::spawn(move || {
+        let result = match source.kind {
+            SourceKind::Csv { .. } => scan_csv(&source.path, header_row),
+            SourceKind::Workbook => scan_workbook_sheet(&source.path, &source.sheet_name, header_row),
+        };
+        match result {
+            Ok(mut table) => {
+                table.enabled = source.enabled;
+                let _ = tx.send(ScanEvent::TableReloaded { index, table });
+            }
+            Err(error) => {
+                let _ = tx.send(ScanEvent::TableReloadFailed {
+                    index,
+                    message: format!("{}：{error:#}", source.display_name()),
+                });
+            }
+        }
+    });
+}
+
+fn scan_csv(path: &Path, header_row: usize) -> Result<SourceTable> {
     let delimiter = detect_delimiter(path)?;
     let mut reader = ReaderBuilder::new()
         .has_headers(false)
@@ -97,11 +120,14 @@ fn scan_csv(path: &Path) -> Result<SourceTable> {
         .from_path(path)
         .with_context(|| "无法打开 CSV")?;
     let mut records = reader.byte_records();
-    let header_record = records
-        .next()
-        .transpose()
-        .with_context(|| "无法读取 CSV 表头")?
-        .unwrap_or_default();
+    let mut header_record = ByteRecord::new();
+    for row_index in 1..=header_row.max(1) {
+        header_record = records
+            .next()
+            .transpose()
+            .with_context(|| "无法读取 CSV 表头")?
+            .with_context(|| format!("CSV 不足 {row_index} 行，无法设为表头"))?;
+    }
     let headers = normalize_headers(header_record.iter().map(decode_csv_field));
     let mut rows = 0_u64;
     for record in records {
@@ -113,6 +139,7 @@ fn scan_csv(path: &Path) -> Result<SourceTable> {
         path: path.to_owned(),
         sheet_name: "CSV".to_owned(),
         kind: SourceKind::Csv { delimiter },
+        header_row: header_row.max(1),
         headers,
         estimated_rows: rows,
         enabled: true,
@@ -120,7 +147,7 @@ fn scan_csv(path: &Path) -> Result<SourceTable> {
     })
 }
 
-fn scan_workbook(path: &Path) -> Result<Vec<SourceTable>> {
+fn scan_workbook(path: &Path, header_row: usize) -> Result<Vec<SourceTable>> {
     let mut workbook = open_workbook_auto(path).with_context(|| "无法打开工作簿")?;
     let sheet_names = workbook.sheet_names().to_vec();
     let mut result = Vec::new();
@@ -129,22 +156,50 @@ fn scan_workbook(path: &Path) -> Result<Vec<SourceTable>> {
         let range = workbook
             .worksheet_range(&sheet_name)
             .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
-        let Some(first_row) = range.rows().next() else {
-            continue;
-        };
-        let headers = normalize_headers(first_row.iter().map(ToString::to_string));
-        let mappings = make_default_mappings(&headers);
-        result.push(SourceTable {
-            path: path.to_owned(),
-            sheet_name,
-            kind: SourceKind::Workbook,
-            headers,
-            estimated_rows: range.height().saturating_sub(1) as u64,
-            enabled: true,
-            mappings,
-        });
+        if range.height() >= header_row.max(1) {
+            result.push(table_from_range(path, sheet_name, &range, header_row));
+        }
     }
     Ok(result)
+}
+
+fn scan_workbook_sheet(path: &Path, sheet_name: &str, header_row: usize) -> Result<SourceTable> {
+    let mut workbook = open_workbook_auto(path).with_context(|| "无法打开工作簿")?;
+    let range = workbook
+        .worksheet_range(sheet_name)
+        .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
+    if range.height() < header_row.max(1) {
+        anyhow::bail!("工作表不足 {} 行，无法设为表头", header_row.max(1));
+    }
+    Ok(table_from_range(path, sheet_name.to_owned(), &range, header_row))
+}
+
+fn table_from_range(
+    path: &Path,
+    sheet_name: String,
+    range: &calamine::Range<calamine::Data>,
+    header_row: usize,
+) -> SourceTable {
+    let header_row = header_row.max(1);
+    let headers = normalize_headers(
+        range
+            .rows()
+            .nth(header_row - 1)
+            .into_iter()
+            .flatten()
+            .map(ToString::to_string),
+    );
+    let mappings = make_default_mappings(&headers);
+    SourceTable {
+        path: path.to_owned(),
+        sheet_name,
+        kind: SourceKind::Workbook,
+        header_row,
+        headers,
+        estimated_rows: range.height().saturating_sub(header_row) as u64,
+        enabled: true,
+        mappings,
+    }
 }
 
 pub fn detect_delimiter(path: &Path) -> Result<u8> {
@@ -179,7 +234,12 @@ pub fn decode_csv_field(bytes: &[u8]) -> String {
     value.into_owned()
 }
 
-pub fn for_each_csv_row<F>(path: &Path, delimiter: u8, mut callback: F) -> Result<()>
+pub fn for_each_csv_row<F>(
+    path: &Path,
+    delimiter: u8,
+    header_row: usize,
+    mut callback: F,
+) -> Result<()>
 where
     F: FnMut(Vec<String>) -> Result<()>,
 {
@@ -189,7 +249,11 @@ where
         .delimiter(delimiter)
         .from_path(path)?;
     let mut record = ByteRecord::new();
-    let _ = reader.read_byte_record(&mut record)?;
+    for _ in 0..header_row.max(1) {
+        if !reader.read_byte_record(&mut record)? {
+            return Ok(());
+        }
+    }
     while reader.read_byte_record(&mut record)? {
         callback(record.iter().map(decode_csv_field).collect())?;
     }

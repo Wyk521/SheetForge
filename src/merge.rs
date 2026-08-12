@@ -112,9 +112,11 @@ fn merge_tables(
         };
 
         let result = match table.kind {
-            SourceKind::Csv { delimiter } => for_each_csv_row(&table.path, delimiter, |row| {
-                consume(row.into_iter().map(CellValue::Text).collect())
-            }),
+            SourceKind::Csv { delimiter } => {
+                for_each_csv_row(&table.path, delimiter, table.header_row, |row| {
+                    consume(row.into_iter().map(CellValue::Text).collect())
+                })
+            }
             SourceKind::Workbook => read_workbook_sheet(table, &mut consume),
         };
         if let Err(error) = result {
@@ -139,7 +141,7 @@ where
 {
     let mut workbook = open_workbook_auto(&table.path)?;
     let range = workbook.worksheet_range(&table.sheet_name)?;
-    for row in range.rows().skip(1) {
+    for row in range.rows().skip(table.header_row) {
         callback(row.iter().map(CellValue::from_calamine).collect())?;
     }
     Ok(())
