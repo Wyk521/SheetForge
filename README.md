@@ -4,7 +4,7 @@
 
 ## 下载 Windows 成品
 
-从 [Releases](https://github.com/Wyk521/SheetForge/releases/latest) 下载 `SheetForge-Windows-x64.zip`，解压后直接运行 `SheetForge.exe`。
+从 [Releases](https://github.com/Wyk521/SheetForge/releases/latest) 直接下载并运行 `SheetForge.exe`，无需解压。
 
 ## 已实现功能
 
@@ -34,7 +34,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 构建完成后：
 
 - 可执行文件：`target\release\SheetForge.exe`
-- 分发压缩包：`dist\SheetForge-Windows-x64.zip`
+- 可直接分发的程序：`dist\SheetForge.exe`
 
 也可以把项目推到 GitHub，打开 **Actions → Build Windows**，运行后下载构建产物。
 

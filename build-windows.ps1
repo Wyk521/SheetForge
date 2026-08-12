@@ -12,17 +12,8 @@ Write-Host "构建精简 Release 版本…" -ForegroundColor Cyan
 cargo build --release
 
 $dist = Join-Path $PSScriptRoot "dist"
-$package = Join-Path $dist "SheetForge-Windows-x64"
-New-Item -ItemType Directory -Force -Path $package | Out-Null
-Copy-Item (Join-Path $PSScriptRoot "target\release\SheetForge.exe") $package -Force
-Copy-Item (Join-Path $PSScriptRoot "README.md") $package -Force
-Copy-Item (Join-Path $PSScriptRoot "LICENSE") $package -Force
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+$exe = Join-Path $dist "SheetForge.exe"
+Copy-Item (Join-Path $PSScriptRoot "target\release\SheetForge.exe") $exe -Force
 
-$zip = Join-Path $dist "SheetForge-Windows-x64.zip"
-if (Test-Path $zip) {
-    Remove-Item $zip -Force
-}
-Compress-Archive -Path (Join-Path $package "*") -DestinationPath $zip -CompressionLevel Optimal
-
-Write-Host "完成：$zip" -ForegroundColor Green
-
+Write-Host "完成：$exe" -ForegroundColor Green

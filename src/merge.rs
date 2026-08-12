@@ -1,6 +1,5 @@
 use crate::model::{
-    build_output_plan, source_to_output_map, MergeMode, MergeOptions, OutputPlan, SourceKind,
-    SourceTable,
+    build_output_plan, source_to_output_map, MergeOptions, OutputPlan, SourceKind, SourceTable,
 };
 use crate::scan::for_each_csv_row;
 use anyhow::{anyhow, Context, Result};

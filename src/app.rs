@@ -269,6 +269,7 @@ impl MergeApp {
     fn show_header(&self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("header")
             .exact_height(96.0)
+            .show_separator_line(false)
             .frame(egui::Frame::new().fill(BLUE_DARK).inner_margin(20.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -589,12 +590,13 @@ impl MergeApp {
         let expected_sheets = ((rows.max(1) - 1) / XLSX_MAX_DATA_ROWS as u64) + 1;
 
         egui::TopBottomPanel::bottom("output_panel")
-            .exact_height(202.0)
+            .exact_height(230.0)
+            .show_separator_line(false)
             .frame(
                 egui::Frame::new()
                     .fill(Color32::WHITE)
-                    .stroke(Stroke::new(1.0, BORDER))
-                    .inner_margin(16.0),
+                    .stroke(Stroke::new(1.0_f32, BORDER))
+                    .inner_margin(14.0),
             )
             .show(ctx, |ui| {
                 section_title(ui, "3  导出结果", "固定操作区，无需滚动页面即可开始合并");
@@ -674,12 +676,20 @@ impl MergeApp {
                         });
                     }
                     AppState::Error(message) => {
-                        ui.label(
-                            RichText::new(message).color(Color32::from_rgb(153, 27, 27)),
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(message).color(Color32::from_rgb(153, 27, 27)),
+                            )
+                            .wrap(),
                         );
                     }
                     _ if !self.progress_label.is_empty() => {
-                        ui.label(RichText::new(&self.progress_label).size(12.0).color(MUTED));
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&self.progress_label).size(12.0).color(MUTED),
+                            )
+                            .wrap(),
+                        );
                     }
                     _ => {
                         let warning = if self.warnings.is_empty() {
@@ -762,9 +772,9 @@ fn configure_style(ctx: &egui::Context) {
     visuals.selection.bg_fill = BLUE;
     visuals.widgets.inactive.bg_fill = Color32::WHITE;
     visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(248, 250, 252);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER);
     visuals.widgets.hovered.bg_fill = SOFT_BLUE;
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, BLUE);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, BLUE);
     ctx.set_visuals(visuals);
     ctx.style_mut(|style| {
         style.spacing.item_spacing = Vec2::new(9.0, 8.0);
@@ -777,7 +787,7 @@ fn configure_style(ctx: &egui::Context) {
 fn card<R>(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::new()
         .fill(Color32::WHITE)
-        .stroke(Stroke::new(1.0, BORDER))
+        .stroke(Stroke::new(1.0_f32, BORDER))
         .corner_radius(12.0)
         .inner_margin(20.0)
         .show(ui, content)
@@ -800,7 +810,7 @@ fn header_step(ui: &mut egui::Ui, number: &str, label: &str, complete: bool) {
     };
     egui::Frame::new()
         .fill(fill)
-        .stroke(Stroke::new(1.0, Color32::from_rgb(96, 165, 250)))
+        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(96, 165, 250)))
         .corner_radius(18.0)
         .inner_margin(8.0)
         .show(ui, |ui| {
@@ -828,7 +838,7 @@ fn primary_button(label: &str, width: f32) -> egui::Button<'_> {
 fn secondary_button(label: &str, width: f32) -> egui::Button<'_> {
     egui::Button::new(RichText::new(label).color(TEXT))
         .fill(Color32::WHITE)
-        .stroke(Stroke::new(1.0, BORDER))
+        .stroke(Stroke::new(1.0_f32, BORDER))
         .min_size(Vec2::new(width, 38.0))
 }
 

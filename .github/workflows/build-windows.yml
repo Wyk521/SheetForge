@@ -24,20 +24,11 @@ jobs:
       - name: Build release
         run: cargo build --release
 
-      - name: Package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist\SheetForge-Windows-x64 | Out-Null
-          Copy-Item target\release\SheetForge.exe dist\SheetForge-Windows-x64\
-          Copy-Item README.md dist\SheetForge-Windows-x64\
-          Copy-Item LICENSE dist\SheetForge-Windows-x64\
-          Compress-Archive -Path dist\SheetForge-Windows-x64\* -DestinationPath dist\SheetForge-Windows-x64.zip
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: SheetForge-Windows-x64
-          path: dist/SheetForge-Windows-x64.zip
+          path: target/release/SheetForge.exe
           if-no-files-found: error
 
       - name: Publish release
@@ -57,13 +48,13 @@ jobs:
           }
           gh release view $tag --repo "${{ github.repository }}" *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag dist\SheetForge-Windows-x64.zip `
+            gh release create $tag target\release\SheetForge.exe `
               --repo "${{ github.repository }}" `
               --target "${{ github.sha }}" `
               --title "SheetForge $tag" `
               --generate-notes
           } else {
-            gh release upload $tag dist\SheetForge-Windows-x64.zip `
+            gh release upload $tag target\release\SheetForge.exe `
               --repo "${{ github.repository }}" `
               --clobber
           }
