@@ -1,0 +1,8 @@
+/target/
+*.xlsx
+*.xls
+*.xlsb
+*.csv
+*.tsv
+!tests/fixtures/*.csv
+
