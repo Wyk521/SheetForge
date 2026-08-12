@@ -1,0 +1,619 @@
+import {
+    AboutSlint, CheckBox, ComboBox, LineEdit, ListView, ProgressIndicator, SpinBox
+} from "std-widgets.slint";
+
+export struct SourceRow {
+    enabled: bool,
+    file-name: string,
+    sheet-name: string,
+    detail: string,
+    header-row: int,
+}
+
+export struct MappingRow {
+    enabled: bool,
+    mapping-index: int,
+    source-name: string,
+    target-name: string,
+}
+
+component Surface inherits Rectangle {
+    background: #ffffff;
+    border-color: #e2e8f0;
+    border-width: 1px;
+    border-radius: 14px;
+    clip: true;
+}
+
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 40px;
+    border-radius: 9px;
+    background: !root.enabled ? #e2e8f0
+        : touch.has-hover ? (root.primary ? #1d4ed8 : #eff6ff)
+        : (root.primary ? #2563eb : #ffffff);
+    border-width: root.primary ? 0px : 1px;
+    border-color: touch.has-hover ? #60a5fa : #cbd5e1;
+
+    Text {
+        text: root.text;
+        color: !root.enabled ? #94a3b8 : (root.primary ? #ffffff : #1e293b);
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+}
+
+component ModeButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 38px;
+    border-radius: 9px;
+    background: root.selected ? #dbeafe : (touch.has-hover ? #f8fafc : #ffffff);
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? #2563eb : #e2e8f0;
+    Text {
+        text: root.text;
+        color: root.selected ? #1d4ed8 : #475569;
+        font-size: 13px;
+        font-weight: root.selected ? 700 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component StepChip inherits Rectangle {
+    in property <string> number;
+    in property <string> text;
+    in property <bool> active;
+
+    width: 112px;
+    height: 34px;
+    border-radius: 17px;
+    background: root.active ? #3b82f6 : #1e3a5f;
+    border-width: 1px;
+    border-color: root.active ? #93c5fd : #476887;
+    Text {
+        text: root.number + "  " + root.text;
+        color: #ffffff;
+        font-size: 12px;
+        font-weight: 650;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component Metric inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    width: 112px;
+    height: 54px;
+    border-radius: 10px;
+    background: #f8fafc;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 2px;
+        Text { text: root.label; color: #64748b; font-size: 11px; }
+        Text { text: root.value; color: #0f172a; font-size: 17px; font-weight: 700; }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "SheetForge 表格工坊";
+    width: 1180px;
+    height: 820px;
+    min-width: 960px;
+    min-height: 680px;
+    background: #f1f5f9;
+    default-font-family: "Microsoft YaHei UI";
+
+    in property <[SourceRow]> sources;
+    in property <[string]> mapping-tables;
+    in property <[MappingRow]> mappings;
+    in-out property <string> output-path;
+    in-out property <int> mode-index: 0;
+    in-out property <int> mapping-table-index: 0;
+    in-out property <bool> include-source-file: false;
+    in-out property <bool> include-source-sheet: false;
+    in property <string> input-label;
+    in property <string> sources-summary;
+    in property <string> common-fields-label;
+    in property <string> rows-metric: "0";
+    in property <string> columns-metric: "0";
+    in property <string> sheets-metric: "1";
+    in property <string> status-text;
+    in property <int> status-kind: 0;
+    in property <float> progress: 0;
+    in property <bool> busy: false;
+    in property <bool> has-sources: false;
+    in property <bool> can-start: false;
+    in property <bool> can-reveal: false;
+    in property <bool> show-progress: false;
+
+    callback choose-folder();
+    callback choose-files();
+    callback source-enabled-changed(int, bool);
+    callback select-all-sources(bool);
+    callback header-row-changed(int, int);
+    callback mode-changed(int);
+    callback include-source-file-changed(bool);
+    callback include-source-sheet-changed(bool);
+    callback mapping-table-changed(int);
+    callback mapping-changed(int, bool, string);
+    callback reset-mapping();
+    callback toggle-common-fields();
+    callback output-path-changed(string);
+    callback choose-output();
+    callback start-merge();
+    callback cancel-merge();
+    callback reveal-output();
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: 92px;
+            background: @linear-gradient(90deg, #0f2f5f 0%, #1e40af 58%, #2563eb 100%);
+            HorizontalLayout {
+                padding-left: 24px;
+                padding-right: 20px;
+                padding-top: 15px;
+                padding-bottom: 15px;
+                spacing: 12px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text {
+                        text: "SheetForge  表格工坊";
+                        color: #ffffff;
+                        font-size: 25px;
+                        font-weight: 750;
+                    }
+                    Text {
+                        text: "快速、安全地合并 Excel 与 CSV  ·  本地处理，数据不上传";
+                        color: #bfdbfe;
+                        font-size: 13px;
+                    }
+                }
+                StepChip { number: "01"; text: "选择数据"; active: root.has-sources; }
+                StepChip { number: "02"; text: "设置规则"; active: root.has-sources; }
+                StepChip { number: "03"; text: "导出 XLSX"; active: root.can-reveal; }
+                AboutSlint { width: 94px; height: 34px; }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            background: #f1f5f9;
+            HorizontalLayout {
+                padding: 18px;
+                spacing: 14px;
+
+                Surface {
+                    horizontal-stretch: 44;
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 10px;
+                        Text { text: "1  选择数据源"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                        Text {
+                            text: "每张表可单独选择表头行，修改后会自动刷新字段";
+                            color: #64748b;
+                            font-size: 12px;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            ActionButton {
+                                width: 116px;
+                                text: "选择文件夹";
+                                primary: true;
+                                enabled: !root.busy;
+                                clicked => { root.choose-folder(); }
+                            }
+                            ActionButton {
+                                width: 126px;
+                                text: "选择多个文件";
+                                enabled: !root.busy;
+                                clicked => { root.choose-files(); }
+                            }
+                        }
+                        Text {
+                            text: root.input-label;
+                            color: #64748b;
+                            font-size: 11px;
+                            overflow: elide;
+                        }
+                        HorizontalLayout {
+                            Text {
+                                horizontal-stretch: 1;
+                                text: root.sources-summary;
+                                color: #334155;
+                                font-size: 12px;
+                                font-weight: 650;
+                            }
+                            ActionButton {
+                                width: 62px;
+                                height: 30px;
+                                text: "全选";
+                                enabled: root.has-sources && !root.busy;
+                                clicked => { root.select-all-sources(true); }
+                            }
+                            ActionButton {
+                                width: 72px;
+                                height: 30px;
+                                text: "全部取消";
+                                enabled: root.has-sources && !root.busy;
+                                clicked => { root.select-all-sources(false); }
+                            }
+                        }
+
+                        if !root.has-sources: Rectangle {
+                            vertical-stretch: 1;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #dbe3ee;
+                            background: #f8fafc;
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 8px;
+                                Text {
+                                    text: "尚无数据表";
+                                    horizontal-alignment: center;
+                                    color: #475569;
+                                    font-size: 16px;
+                                    font-weight: 650;
+                                }
+                                Text {
+                                    text: "选择一个文件夹或多个工作簿开始";
+                                    horizontal-alignment: center;
+                                    color: #94a3b8;
+                                    font-size: 12px;
+                                }
+                            }
+                        }
+
+                        if root.has-sources: source-list := ListView {
+                            vertical-stretch: 1;
+                            for source[index] in root.sources: Rectangle {
+                                width: source-list.width - 4px;
+                                height: 76px;
+                                border-radius: 9px;
+                                background: index % 2 == 0 ? #f8fafc : #ffffff;
+                                border-width: 1px;
+                                border-color: source.enabled ? #dbeafe : #eef2f7;
+                                HorizontalLayout {
+                                    padding: 10px;
+                                    spacing: 9px;
+                                    enabled-check := CheckBox {
+                                        width: 26px;
+                                        checked: source.enabled;
+                                        enabled: !root.busy;
+                                        toggled => { root.source-enabled-changed(index, self.checked); }
+                                    }
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: 3px;
+                                        Text {
+                                            text: source.file-name;
+                                            color: #0f172a;
+                                            font-size: 13px;
+                                            font-weight: 650;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: source.sheet-name + "  ·  " + source.detail;
+                                            color: #64748b;
+                                            font-size: 11px;
+                                            overflow: elide;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        width: 96px;
+                                        spacing: 2px;
+                                        Text {
+                                            text: "表头行";
+                                            color: #64748b;
+                                            font-size: 10px;
+                                            horizontal-alignment: center;
+                                        }
+                                        SpinBox {
+                                            value: source.header-row;
+                                            minimum: 1;
+                                            maximum: 100000;
+                                            enabled: !root.busy;
+                                            edited(value) => { root.header-row-changed(index, value); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Surface {
+                    horizontal-stretch: 56;
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 10px;
+                        Text { text: "2  设置合并规则"; color: #0f172a; font-size: 18px; font-weight: 700; }
+                        Text {
+                            text: "表头匹配忽略英文大小写，并自动去除首尾空格";
+                            color: #64748b;
+                            font-size: 12px;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            ModeButton {
+                                horizontal-stretch: 1;
+                                text: "并集";
+                                selected: root.mode-index == 0;
+                                clicked => { root.mode-index = 0; root.mode-changed(0); }
+                            }
+                            ModeButton {
+                                horizontal-stretch: 1;
+                                text: "交集";
+                                selected: root.mode-index == 1;
+                                clicked => { root.mode-index = 1; root.mode-changed(1); }
+                            }
+                            ModeButton {
+                                horizontal-stretch: 1;
+                                text: "手动映射";
+                                selected: root.mode-index == 2;
+                                clicked => { root.mode-index = 2; root.mode-changed(2); }
+                            }
+                        }
+                        Text {
+                            text: root.mode-index == 0 ? "保留所有数据表出现过的列"
+                                : root.mode-index == 1 ? "只保留全部已选数据表共有的列"
+                                : "以并集为基础，只修正写错或含义相同的列名";
+                            color: #64748b;
+                            font-size: 11px;
+                        }
+                        HorizontalLayout {
+                            spacing: 20px;
+                            CheckBox {
+                                text: "追加来源文件列";
+                                checked: root.include-source-file;
+                                toggled => {
+                                    root.include-source-file = self.checked;
+                                    root.include-source-file-changed(self.checked);
+                                }
+                            }
+                            CheckBox {
+                                text: "追加来源工作表列";
+                                checked: root.include-source-sheet;
+                                toggled => {
+                                    root.include-source-sheet = self.checked;
+                                    root.include-source-sheet-changed(self.checked);
+                                }
+                            }
+                        }
+
+                        if root.mode-index != 2: Rectangle {
+                            vertical-stretch: 1;
+                            background: #f8fafc;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #e2e8f0;
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 8px;
+                                Text {
+                                    text: root.mode-index == 0 ? "按列名自动取并集" : "按列名自动取交集";
+                                    horizontal-alignment: center;
+                                    color: #334155;
+                                    font-size: 16px;
+                                    font-weight: 650;
+                                }
+                                Text {
+                                    text: "无需额外设置，可以直接开始合并";
+                                    horizontal-alignment: center;
+                                    color: #94a3b8;
+                                    font-size: 12px;
+                                }
+                            }
+                        }
+
+                        if root.mode-index == 2 && !root.has-sources: Rectangle {
+                            vertical-stretch: 1;
+                            background: #f8fafc;
+                            border-radius: 10px;
+                            Text {
+                                text: "请先选择并勾选数据表";
+                                color: #64748b;
+                                font-size: 14px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        if root.mode-index == 2 && root.has-sources: VerticalLayout {
+                            vertical-stretch: 1;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                ComboBox {
+                                    horizontal-stretch: 1;
+                                    model: root.mapping-tables;
+                                    current-index: root.mapping-table-index;
+                                    selected(value) => {
+                                        root.mapping-table-index = self.current-index;
+                                        root.mapping-table-changed(self.current-index);
+                                    }
+                                }
+                                ActionButton {
+                                    width: 112px;
+                                    text: "恢复本表默认";
+                                    clicked => { root.reset-mapping(); }
+                                }
+                            }
+                            HorizontalLayout {
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: "将不同写法改成相同目标列名，其他字段仍按并集输出";
+                                    color: #64748b;
+                                    font-size: 11px;
+                                }
+                                ActionButton {
+                                    width: 188px;
+                                    height: 32px;
+                                    text: root.common-fields-label;
+                                    clicked => { root.toggle-common-fields(); }
+                                }
+                            }
+                            mapping-list := ListView {
+                                vertical-stretch: 1;
+                                for mapping[index] in root.mappings: Rectangle {
+                                    width: mapping-list.width - 4px;
+                                    height: 68px;
+                                    border-radius: 9px;
+                                    background: index % 2 == 0 ? #f8fafc : #ffffff;
+                                    border-width: 1px;
+                                    border-color: #eef2f7;
+                                    HorizontalLayout {
+                                        padding: 9px;
+                                        spacing: 8px;
+                                        map-check := CheckBox {
+                                            width: 26px;
+                                            checked: mapping.enabled;
+                                            toggled => {
+                                                root.mapping-changed(mapping.mapping-index, self.checked, mapping.target-name);
+                                            }
+                                        }
+                                        Text {
+                                            width: 150px;
+                                            text: mapping.source-name;
+                                            color: #334155;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            width: 20px;
+                                            text: "→";
+                                            color: #2563eb;
+                                            font-size: 17px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        LineEdit {
+                                            horizontal-stretch: 1;
+                                            text: mapping.target-name;
+                                            enabled: map-check.checked;
+                                            placeholder-text: "目标列名";
+                                            edited(value) => {
+                                                root.mapping-changed(mapping.mapping-index, map-check.checked, value);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 194px;
+            background: #ffffff;
+            border-width: 1px;
+            border-color: #dbe3ee;
+            VerticalLayout {
+                padding-left: 22px;
+                padding-right: 22px;
+                padding-top: 14px;
+                padding-bottom: 12px;
+                spacing: 8px;
+                HorizontalLayout {
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "3  导出结果";
+                        color: #0f172a;
+                        font-size: 17px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: "固定操作区 · 超限自动拆分 Sheet";
+                        color: #64748b;
+                        font-size: 11px;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 9px;
+                    Text { width: 68px; text: "输出位置"; color: #334155; font-size: 12px; vertical-alignment: center; }
+                    output-edit := LineEdit {
+                        horizontal-stretch: 1;
+                        text: root.output-path;
+                        enabled: !root.busy;
+                        placeholder-text: "请选择输出文件";
+                        edited(value) => { root.output-path = value; root.output-path-changed(value); }
+                    }
+                    ActionButton {
+                        width: 88px;
+                        text: "浏览…";
+                        enabled: !root.busy;
+                        clicked => { root.choose-output(); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Metric { label: "预计数据行"; value: root.rows-metric; }
+                    Metric { label: "输出列"; value: root.columns-metric; }
+                    Metric { label: "预计 Sheet"; value: root.sheets-metric; }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    if root.busy: ActionButton {
+                        width: 84px;
+                        text: "取消";
+                        clicked => { root.cancel-merge(); }
+                    }
+                    ActionButton {
+                        width: 154px;
+                        text: root.busy ? "正在处理…" : "开始合并";
+                        primary: true;
+                        enabled: root.can-start;
+                        clicked => { root.start-merge(); }
+                    }
+                }
+                if root.show-progress: ProgressIndicator {
+                    height: 7px;
+                    progress: root.progress;
+                    indeterminate: root.busy && root.progress <= 0;
+                }
+                HorizontalLayout {
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.status-text;
+                        color: root.status-kind == 1 ? #15803d : root.status-kind == 2 ? #b91c1c : #64748b;
+                        font-size: 12px;
+                        font-weight: root.status-kind == 0 ? 450 : 650;
+                        wrap: word-wrap;
+                        vertical-alignment: top;
+                    }
+                    if root.can-reveal: ActionButton {
+                        width: 116px;
+                        height: 30px;
+                        text: "在文件夹中显示";
+                        clicked => { root.reveal-output(); }
+                    }
+                }
+            }
+        }
+    }
+}

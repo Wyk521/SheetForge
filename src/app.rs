@@ -1,32 +1,32 @@
 use crate::merge::{spawn_merge, MergeEvent, XLSX_MAX_DATA_ROWS};
-use crate::model::{build_output_plan, common_header_keys, MergeMode, MergeOptions, SourceTable};
-use crate::scan::{collect_folder, spawn_scan, spawn_table_reload, supported_file, ScanEvent};
-use eframe::egui::{
-    self, Align, Color32, FontData, FontDefinitions, FontFamily, FontId, Layout, RichText,
-    Stroke, Vec2,
+use crate::model::{
+    build_output_plan, common_header_keys, header_key, MergeMode, MergeOptions, SourceTable,
 };
+use crate::scan::{collect_folder, spawn_scan, spawn_table_reload, supported_file, ScanEvent};
+use crate::{AppWindow, MappingRow, SourceRow};
 use rfd::FileDialog;
+use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
-
-const BLUE: Color32 = Color32::from_rgb(37, 99, 235);
-const BLUE_DARK: Color32 = Color32::from_rgb(30, 64, 175);
-const TEXT: Color32 = Color32::from_rgb(15, 23, 42);
-const MUTED: Color32 = Color32::from_rgb(100, 116, 139);
-const BORDER: Color32 = Color32::from_rgb(226, 232, 240);
-const SOFT_BLUE: Color32 = Color32::from_rgb(239, 246, 255);
+use std::time::Duration;
 
 enum AppState {
     Ready,
     Scanning,
     Merging,
-    Done { output: PathBuf, rows: u64, sheets: usize },
+    Done {
+        output: PathBuf,
+        rows: u64,
+        sheets: usize,
+    },
     Error(String),
 }
 
-pub struct MergeApp {
+struct MergeApp {
     sources: Vec<SourceTable>,
     input_label: String,
     output_path: String,
@@ -44,10 +44,8 @@ pub struct MergeApp {
     warnings: Vec<String>,
 }
 
-impl MergeApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        configure_fonts(&cc.egui_ctx);
-        configure_style(&cc.egui_ctx);
+impl Default for MergeApp {
+    fn default() -> Self {
         Self {
             sources: Vec::new(),
             input_label: "尚未选择文件或文件夹".to_owned(),
@@ -66,9 +64,28 @@ impl MergeApp {
             warnings: Vec::new(),
         }
     }
+}
 
+impl MergeApp {
     fn busy(&self) -> bool {
         matches!(self.state, AppState::Scanning | AppState::Merging)
+    }
+
+    fn enabled_indices(&self) -> Vec<usize> {
+        self.sources
+            .iter()
+            .enumerate()
+            .filter_map(|(index, table)| table.enabled.then_some(index))
+            .collect()
+    }
+
+    fn ensure_mapping_selection(&mut self) {
+        let enabled = self.enabled_indices();
+        if let Some(first) = enabled.first() {
+            if !enabled.contains(&self.selected_mapping_table) {
+                self.selected_mapping_table = *first;
+            }
+        }
     }
 
     fn start_folder_scan(&mut self, folder: PathBuf) {
@@ -110,6 +127,21 @@ impl MergeApp {
         spawn_scan(paths, tx);
     }
 
+    fn start_table_reload(&mut self, index: usize, header_row: usize) {
+        let Some(source) = self.sources.get(index).cloned() else {
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        self.scan_rx = Some(rx);
+        self.state = AppState::Scanning;
+        self.progress = 0.15;
+        self.progress_label = format!(
+            "正在按第 {header_row} 行重新读取表头：{}",
+            source.display_name()
+        );
+        spawn_table_reload(index, source, header_row, tx);
+    }
+
     fn start_merge(&mut self) {
         let output = PathBuf::from(self.output_path.trim());
         if output.as_os_str().is_empty() {
@@ -129,8 +161,7 @@ impl MergeApp {
             include_source_file: self.include_source_file,
             include_source_sheet: self.include_source_sheet,
         };
-        let plan = build_output_plan(&self.sources, &options);
-        if plan.headers.is_empty() {
+        if build_output_plan(&self.sources, &options).headers.is_empty() {
             self.state = AppState::Error("没有可输出的列，请检查所选表和列映射".to_owned());
             return;
         }
@@ -150,65 +181,56 @@ impl MergeApp {
         );
     }
 
-    fn start_table_reload(&mut self, index: usize, header_row: usize) {
-        let Some(source) = self.sources.get(index).cloned() else {
-            return;
-        };
-        let (tx, rx) = mpsc::channel();
-        self.scan_rx = Some(rx);
-        self.state = AppState::Scanning;
-        self.progress = 0.15;
-        self.progress_label = format!(
-            "正在按第 {header_row} 行重新读取表头：{}",
-            source.display_name()
-        );
-        spawn_table_reload(index, source, header_row, tx);
-    }
-
-    fn poll_workers(&mut self, ctx: &egui::Context) {
+    fn poll_workers(&mut self) -> bool {
+        let mut changed = false;
         let scan_events: Vec<_> = self
             .scan_rx
             .as_ref()
             .map(|rx| rx.try_iter().collect())
             .unwrap_or_default();
         for event in scan_events {
-                match event {
-                    ScanEvent::Progress { done, total, name } => {
-                        self.progress = if total == 0 { 0.0 } else { done as f32 / total as f32 };
-                        self.progress_label = format!("正在扫描：{name}");
-                    }
-                    ScanEvent::Finished { tables, warnings } => {
-                        self.sources = tables;
-                        self.warnings = warnings;
-                        self.selected_mapping_table = 0;
-                        self.progress = 1.0;
-                        self.progress_label = format!("已识别 {} 个数据表", self.sources.len());
-                        self.state = AppState::Ready;
-                        self.scan_rx = None;
-                    }
-                    ScanEvent::TableReloaded { index, table } => {
-                        let name = table.display_name();
-                        let header_row = table.header_row;
-                        if let Some(slot) = self.sources.get_mut(index) {
-                            *slot = table;
-                        }
-                        self.selected_mapping_table = index;
-                        self.progress = 1.0;
-                        self.progress_label =
-                            format!("已按第 {header_row} 行刷新表头：{name}");
-                        self.state = AppState::Ready;
-                        self.scan_rx = None;
-                    }
-                    ScanEvent::TableReloadFailed { index, message } => {
-                        self.selected_mapping_table = index.min(self.sources.len().saturating_sub(1));
-                        self.state = AppState::Error(format!("重新读取表头失败：{message}"));
-                        self.scan_rx = None;
-                    }
-                    ScanEvent::Failed(message) => {
-                        self.state = AppState::Error(message);
-                        self.scan_rx = None;
-                    }
+            changed = true;
+            match event {
+                ScanEvent::Progress { done, total, name } => {
+                    self.progress = if total == 0 {
+                        0.0
+                    } else {
+                        done as f32 / total as f32
+                    };
+                    self.progress_label = format!("正在扫描：{name}");
                 }
+                ScanEvent::Finished { tables, warnings } => {
+                    self.sources = tables;
+                    self.warnings = warnings;
+                    self.selected_mapping_table = 0;
+                    self.ensure_mapping_selection();
+                    self.progress = 1.0;
+                    self.progress_label = format!("已识别 {} 个数据表", self.sources.len());
+                    self.state = AppState::Ready;
+                    self.scan_rx = None;
+                }
+                ScanEvent::TableReloaded { index, table } => {
+                    let name = table.display_name();
+                    let header_row = table.header_row;
+                    if let Some(slot) = self.sources.get_mut(index) {
+                        *slot = table;
+                    }
+                    self.selected_mapping_table = index;
+                    self.progress = 1.0;
+                    self.progress_label = format!("已按第 {header_row} 行刷新表头：{name}");
+                    self.state = AppState::Ready;
+                    self.scan_rx = None;
+                }
+                ScanEvent::TableReloadFailed { index, message } => {
+                    self.selected_mapping_table = index.min(self.sources.len().saturating_sub(1));
+                    self.state = AppState::Error(format!("重新读取表头失败：{message}"));
+                    self.scan_rx = None;
+                }
+                ScanEvent::Failed(message) => {
+                    self.state = AppState::Error(message);
+                    self.scan_rx = None;
+                }
+            }
         }
 
         let merge_events: Vec<_> = self
@@ -217,629 +239,398 @@ impl MergeApp {
             .map(|rx| rx.try_iter().collect())
             .unwrap_or_default();
         for event in merge_events {
-                match event {
-                    MergeEvent::Progress { current, total, label } => {
-                        self.progress = if total == 0 { 0.0 } else { current as f32 / total as f32 };
-                        self.progress_label = format!("{label}  ·  {current} / {total} 行");
-                    }
-                    MergeEvent::Finished { output, rows, sheets } => {
-                        self.progress = 1.0;
-                        self.progress_label = "合并完成".to_owned();
-                        self.state = AppState::Done { output, rows, sheets };
-                        self.merge_rx = None;
-                    }
-                    MergeEvent::Cancelled => {
-                        self.progress_label = "已取消".to_owned();
-                        self.state = AppState::Ready;
-                        self.merge_rx = None;
-                    }
-                    MergeEvent::Failed(message) => {
-                        self.state = AppState::Error(message);
-                        self.merge_rx = None;
-                    }
-                }
-        }
-        if self.busy() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(80));
-        }
-    }
-
-    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
-        if self.busy() {
-            return;
-        }
-        let dropped: Vec<PathBuf> = ctx.input(|input| {
-            input
-                .raw
-                .dropped_files
-                .iter()
-                .filter_map(|file| file.path.clone())
-                .collect()
-        });
-        if dropped.is_empty() {
-            return;
-        }
-        if dropped.len() == 1 && dropped[0].is_dir() {
-            self.start_folder_scan(dropped[0].clone());
-        } else {
-            self.start_files_scan(dropped);
-        }
-    }
-
-    fn show_header(&self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("header")
-            .exact_height(96.0)
-            .show_separator_line(false)
-            .frame(egui::Frame::new().fill(BLUE_DARK).inner_margin(20.0))
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.add_space(3.0);
-                        ui.label(
-                            RichText::new("SheetForge  表格工坊")
-                                .size(26.0)
-                                .strong()
-                                .color(Color32::WHITE),
-                        );
-                        ui.add_space(5.0);
-                        ui.label(
-                            RichText::new("快速、安全地合并 Excel 与 CSV")
-                                .size(14.0)
-                                .color(Color32::from_rgb(191, 219, 254)),
-                        );
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(
-                            RichText::new("本地处理 · 数据不上传")
-                                .size(13.0)
-                                .color(Color32::from_rgb(219, 234, 254)),
-                        );
-                        header_step(
-                            ui,
-                            "03",
-                            "导出 XLSX",
-                            matches!(self.state, AppState::Done { .. }),
-                        );
-                        header_step(ui, "02", "设置规则", !self.sources.is_empty());
-                        header_step(ui, "01", "选择数据", !self.sources.is_empty());
-                    });
-                });
-            });
-    }
-
-    fn show_input_card(&mut self, ui: &mut egui::Ui, panel_height: f32) {
-        let mut reload_request = None;
-        let controls_enabled = !self.busy();
-        card(ui, |ui| {
-            ui.set_min_height((panel_height - 42.0).max(180.0));
-            section_title(ui, "1  选择数据源", "逐表选择表头所在行，修改后自动刷新字段");
-            ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(controls_enabled, primary_button("选择文件夹", 116.0))
-                    .clicked()
-                {
-                    if let Some(folder) = FileDialog::new().pick_folder() {
-                        self.start_folder_scan(folder);
-                    }
-                }
-                if ui
-                    .add_enabled(controls_enabled, secondary_button("选择多个文件", 126.0))
-                    .clicked()
-                {
-                    if let Some(paths) = FileDialog::new()
-                        .add_filter("表格文件", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"])
-                        .pick_files()
-                    {
-                        self.start_files_scan(paths);
-                    }
-                }
-            });
-            ui.add_space(7.0);
-            ui.label(RichText::new(&self.input_label).size(12.0).color(MUTED));
-
-            if !self.sources.is_empty() {
-                ui.add_space(12.0);
-                let selected = self.sources.iter().filter(|table| table.enabled).count();
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!("已识别 {} 个数据表 · 已选 {selected} 个", self.sources.len()))
-                            .strong()
-                            .color(TEXT),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("全部取消").clicked() {
-                            for table in &mut self.sources {
-                                table.enabled = false;
-                            }
-                        }
-                        if ui.small_button("全选").clicked() {
-                            for table in &mut self.sources {
-                                table.enabled = true;
-                            }
-                        }
-                    });
-                });
-                ui.add_space(8.0);
-                let list_height = (panel_height - 205.0).max(90.0);
-                egui::ScrollArea::vertical()
-                    .id_salt("source_tables_scroll")
-                    .max_height(list_height)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for (index, table) in self.sources.iter_mut().enumerate() {
-                            let fill = if index % 2 == 0 {
-                                Color32::from_rgb(248, 250, 252)
-                            } else {
-                                Color32::WHITE
-                            };
-                            egui::Frame::new()
-                                .fill(fill)
-                                .corner_radius(7.0)
-                                .inner_margin(9.0)
-                                .show(ui, |ui| {
-                                    ui.set_min_width(ui.available_width());
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(&mut table.enabled, "");
-                                        let file = table
-                                            .path
-                                            .file_name()
-                                            .map(|v| v.to_string_lossy())
-                                            .unwrap_or_default();
-                                        ui.vertical(|ui| {
-                                            ui.label(
-                                                RichText::new(file.as_ref()).strong().color(TEXT),
-                                            )
-                                            .on_hover_text(table.path.display().to_string());
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    RichText::new(format!(
-                                                        "{}  ·  {} 行  ·  {} 列",
-                                                        table.sheet_name,
-                                                        format_number(table.estimated_rows),
-                                                        table.headers.len()
-                                                    ))
-                                                    .size(11.0)
-                                                    .color(MUTED),
-                                                );
-                                                ui.with_layout(
-                                                    Layout::right_to_left(Align::Center),
-                                                    |ui| {
-                                                        ui.label(
-                                                            RichText::new("表头行")
-                                                                .size(11.0)
-                                                                .color(MUTED),
-                                                        );
-                                                        let mut header_row = table.header_row;
-                                                        let response = ui.add_enabled(
-                                                            controls_enabled,
-                                                            egui::DragValue::new(&mut header_row)
-                                                                .range(1..=100_000)
-                                                                .speed(1.0),
-                                                        );
-                                                        if response.changed()
-                                                            && header_row != table.header_row
-                                                        {
-                                                            reload_request =
-                                                                Some((index, header_row));
-                                                        }
-                                                    },
-                                                );
-                                            });
-                                        });
-                                    });
-                                });
-                        }
-                    });
-            }
-        });
-        if let Some((index, header_row)) = reload_request {
-            self.start_table_reload(index, header_row);
-        }
-    }
-
-    fn show_rules_card(&mut self, ui: &mut egui::Ui, panel_height: f32) {
-        card(ui, |ui| {
-            ui.set_min_height((panel_height - 42.0).max(180.0));
-            section_title(ui, "2  设置合并规则", "表头匹配不区分大小写，并会自动去除首尾空格");
-            ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.mode, MergeMode::Union, "并集");
-                ui.selectable_value(&mut self.mode, MergeMode::Intersection, "交集");
-                ui.selectable_value(&mut self.mode, MergeMode::Manual, "手动映射");
-            });
-            let mode_help = match self.mode {
-                MergeMode::Union => "保留所有数据表中出现过的列",
-                MergeMode::Intersection => "只保留所有数据表共有的列",
-                MergeMode::Manual => "以并集为基础，只需修正拼写不一致或含义相同的列名",
-            };
-            ui.label(RichText::new(mode_help).size(11.0).color(MUTED));
-            ui.add_space(12.0);
-            ui.checkbox(&mut self.include_source_file, "追加“来源文件”列");
-            ui.checkbox(&mut self.include_source_sheet, "追加“来源工作表”列");
-
-            if self.mode == MergeMode::Manual && self.sources.iter().any(|table| table.enabled) {
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(8.0);
-                self.show_manual_mapping(ui, (panel_height - 265.0).max(90.0));
-            }
-        });
-    }
-
-    fn show_manual_mapping(&mut self, ui: &mut egui::Ui, mapping_height: f32) {
-        let enabled_indices: Vec<usize> = self
-            .sources
-            .iter()
-            .enumerate()
-            .filter_map(|(index, table)| table.enabled.then_some(index))
-            .collect();
-        let Some(&first_enabled) = enabled_indices.first() else {
-            return;
-        };
-        if !enabled_indices.contains(&self.selected_mapping_table) {
-            self.selected_mapping_table = first_enabled;
-        }
-        let common_headers = common_header_keys(&self.sources);
-        let common_count = self.sources[self.selected_mapping_table]
-            .mappings
-            .iter()
-            .filter(|mapping| common_headers.contains(&crate::model::header_key(&mapping.source_name)))
-            .count();
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("当前数据表").strong().color(TEXT));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.small_button("恢复本表默认").clicked() {
-                    let table = &mut self.sources[self.selected_mapping_table];
-                    for mapping in &mut table.mappings {
-                        mapping.target_name = mapping.source_name.clone();
-                        mapping.enabled = true;
-                    }
-                }
-            });
-        });
-        egui::ComboBox::from_id_salt("mapping_table")
-            .width(ui.available_width())
-            .selected_text(self.sources[self.selected_mapping_table].display_name())
-            .show_ui(ui, |ui| {
-                for index in &enabled_indices {
-                    let table = &self.sources[*index];
-                    ui.selectable_value(
-                        &mut self.selected_mapping_table,
-                        *index,
-                        table.display_name(),
-                    );
-                }
-            });
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            let label = if self.hide_common_mappings {
-                format!("显示共有字段（已隐藏 {common_count} 项）")
-            } else {
-                format!("隐藏共有字段（{common_count} 项）")
-            };
-            if ui
-                .add(secondary_button(&label, 188.0))
-                .on_hover_text("共有字段会按原列名自动合并，通常无需手动修改")
-                .clicked()
-            {
-                self.hide_common_mappings = !self.hide_common_mappings;
-            }
-        });
-        ui.label(
-            RichText::new("将写错或含义相同的列改成同一目标列名；其余字段仍按并集输出。")
-                .size(12.0)
-                .color(MUTED),
-        );
-        ui.add_space(8.0);
-        let hide_common_mappings = self.hide_common_mappings;
-        let table = &mut self.sources[self.selected_mapping_table];
-        egui::ScrollArea::vertical()
-            .id_salt(("manual_mapping_scroll", self.selected_mapping_table))
-            .max_height(mapping_height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for (index, mapping) in table
-                    .mappings
-                    .iter_mut()
-                    .filter(|mapping| {
-                        !hide_common_mappings
-                            || !common_headers.contains(&crate::model::header_key(&mapping.source_name))
-                    })
-                    .enumerate()
-                {
-                    let fill = if index % 2 == 0 {
-                        Color32::from_rgb(248, 250, 252)
+            changed = true;
+            match event {
+                MergeEvent::Progress {
+                    current,
+                    total,
+                    label,
+                } => {
+                    self.progress = if total == 0 {
+                        0.0
                     } else {
-                        Color32::WHITE
+                        current as f32 / total as f32
                     };
-                    egui::Frame::new()
-                        .fill(fill)
-                        .corner_radius(7.0)
-                        .inner_margin(9.0)
-                        .show(ui, |ui| {
-                            ui.set_min_width(ui.available_width());
-                            ui.checkbox(&mut mapping.enabled, &mapping.source_name);
-                            ui.add_space(3.0);
-                            ui.label(RichText::new("映射到").size(11.0).color(MUTED));
-                            let edit_width = ui.available_width();
-                            ui.add_enabled(
-                                mapping.enabled,
-                                egui::TextEdit::singleline(&mut mapping.target_name)
-                                    .desired_width(edit_width)
-                                    .hint_text("留空则不输出"),
-                            );
-                        });
+                    self.progress_label = format!("{label}  ·  {current} / {total} 行");
                 }
-            });
+                MergeEvent::Finished {
+                    output,
+                    rows,
+                    sheets,
+                } => {
+                    self.progress = 1.0;
+                    self.progress_label = "合并完成".to_owned();
+                    self.state = AppState::Done {
+                        output,
+                        rows,
+                        sheets,
+                    };
+                    self.merge_rx = None;
+                }
+                MergeEvent::Cancelled => {
+                    self.progress_label = "已取消".to_owned();
+                    self.state = AppState::Ready;
+                    self.merge_rx = None;
+                }
+                MergeEvent::Failed(message) => {
+                    self.state = AppState::Error(message);
+                    self.merge_rx = None;
+                }
+            }
+        }
+        changed
     }
+}
 
-    fn show_output_panel(&mut self, ctx: &egui::Context) {
-        let options = MergeOptions {
-            mode: self.mode,
-            include_source_file: self.include_source_file,
-            include_source_sheet: self.include_source_sheet,
+pub fn run() -> Result<(), slint::PlatformError> {
+    let ui = AppWindow::new()?;
+    let state = Rc::new(RefCell::new(MergeApp::default()));
+    sync_ui(&ui, &state.borrow());
+    install_callbacks(&ui, state.clone());
+
+    let weak = ui.as_weak();
+    let poll_state = state.clone();
+    let timer = Timer::default();
+    timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
+        let Some(ui) = weak.upgrade() else {
+            return;
         };
-        let plan = build_output_plan(&self.sources, &options);
-        let rows: u64 = self
-            .sources
-            .iter()
-            .filter(|table| table.enabled)
-            .map(|table| table.estimated_rows)
-            .sum();
-        let expected_sheets = ((rows.max(1) - 1) / XLSX_MAX_DATA_ROWS as u64) + 1;
+        if poll_state.borrow_mut().poll_workers() {
+            sync_ui(&ui, &poll_state.borrow());
+        }
+    });
 
-        egui::TopBottomPanel::bottom("output_panel")
-            .exact_height(230.0)
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(Color32::WHITE)
-                    .stroke(Stroke::new(1.0_f32, BORDER))
-                    .inner_margin(14.0),
+    ui.run()
+}
+
+fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_choose_folder(move || {
+        if callback_state.borrow().busy() {
+            return;
+        }
+        if let Some(folder) = FileDialog::new().pick_folder() {
+            callback_state.borrow_mut().start_folder_scan(folder);
+            sync_weak(&weak, &callback_state);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_choose_files(move || {
+        if callback_state.borrow().busy() {
+            return;
+        }
+        if let Some(paths) = FileDialog::new()
+            .add_filter(
+                "表格文件",
+                &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"],
             )
-            .show(ctx, |ui| {
-                section_title(ui, "3  导出结果", "固定操作区，无需滚动页面即可开始合并");
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("输出位置").strong().color(TEXT));
-                    let path_width = (ui.available_width() - 105.0).max(180.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.output_path)
-                            .desired_width(path_width)
-                            .hint_text("请选择输出文件"),
-                    );
-                    if ui
-                        .add_enabled(!self.busy(), secondary_button("浏览…", 84.0))
-                        .clicked()
-                    {
-                        if let Some(path) = FileDialog::new()
-                            .add_filter("Excel 工作簿", &["xlsx"])
-                            .set_file_name("合并结果.xlsx")
-                            .save_file()
-                        {
-                            self.output_path = path.display().to_string();
-                        }
-                    }
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    compact_metric(ui, "预计行", &format_number(rows));
-                    ui.separator();
-                    compact_metric(ui, "输出列", &plan.headers.len().to_string());
-                    ui.separator();
-                    compact_metric(ui, "Sheet", &expected_sheets.to_string());
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let can_start = !self.busy()
-                            && self.sources.iter().any(|table| table.enabled)
-                            && !plan.headers.is_empty();
-                        if ui
-                            .add_enabled(can_start, primary_button("开始合并", 150.0))
-                            .clicked()
-                        {
-                            self.start_merge();
-                        }
-                        if matches!(self.state, AppState::Merging)
-                            && ui.add(secondary_button("取消", 80.0)).clicked()
-                        {
-                            self.cancel.store(true, Ordering::Relaxed);
-                            self.progress_label = "正在取消…".to_owned();
-                        }
-                    });
-                });
+            .pick_files()
+        {
+            callback_state.borrow_mut().start_files_scan(paths);
+            sync_weak(&weak, &callback_state);
+        }
+    });
 
-                if self.busy() || !self.progress_label.is_empty() {
-                    ui.add_space(8.0);
-                    ui.add(
-                        egui::ProgressBar::new(self.progress.clamp(0.0, 1.0))
-                            .animate(self.busy())
-                            .show_percentage(),
-                    );
-                    ui.add_space(3.0);
-                }
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_source_enabled_changed(move |index, enabled| {
+        let mut app = callback_state.borrow_mut();
+        if let Some(table) = app.sources.get_mut(index.max(0) as usize) {
+            table.enabled = enabled;
+        }
+        app.ensure_mapping_selection();
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
 
-                match &self.state {
-                    AppState::Done { output, rows, sheets } => {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "合并成功：{} 行，{} 个 Sheet",
-                                    format_number(*rows),
-                                    sheets
-                                ))
-                                .strong()
-                                .color(Color32::from_rgb(22, 101, 52)),
-                            );
-                            if ui.small_button("在文件夹中显示").clicked() {
-                                reveal_in_explorer(output);
-                            }
-                        });
-                    }
-                    AppState::Error(message) => {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(message).color(Color32::from_rgb(153, 27, 27)),
-                            )
-                            .wrap(),
-                        );
-                    }
-                    _ if !self.progress_label.is_empty() => {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&self.progress_label).size(12.0).color(MUTED),
-                            )
-                            .wrap(),
-                        );
-                    }
-                    _ => {
-                        let warning = if self.warnings.is_empty() {
-                            format!("当前模式：{}", self.mode.label())
-                        } else {
-                            format!(
-                                "{} 个文件或工作表未能读取 · 当前模式：{}",
-                                self.warnings.len(),
-                                self.mode.label()
-                            )
-                        };
-                        ui.label(RichText::new(warning).size(12.0).color(MUTED));
-                    }
-                }
-            });
-    }
-}
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_select_all_sources(move |enabled| {
+        let mut app = callback_state.borrow_mut();
+        for table in &mut app.sources {
+            table.enabled = enabled;
+        }
+        app.ensure_mapping_selection();
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
 
-impl eframe::App for MergeApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll_workers(ctx);
-        self.handle_dropped_files(ctx);
-        self.show_header(ctx);
-        self.show_output_panel(ctx);
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(Color32::from_rgb(241, 245, 249)).inner_margin(22.0))
-            .show(ctx, |ui| {
-                let panel_height = ui.available_height();
-                let gap = 14.0;
-                let content_width = (ui.available_width() - gap).max(640.0);
-                let input_width = content_width * 0.44;
-                let rules_width = content_width - input_width;
-                ui.horizontal(|ui| {
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(input_width, panel_height),
-                        Layout::top_down(Align::Min),
-                        |ui| self.show_input_card(ui, panel_height),
-                    );
-                    ui.add_space(gap);
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(rules_width, panel_height),
-                        Layout::top_down(Align::Min),
-                        |ui| self.show_rules_card(ui, panel_height),
-                    );
-                });
-            });
-    }
-}
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_header_row_changed(move |index, row| {
+        callback_state
+            .borrow_mut()
+            .start_table_reload(index.max(0) as usize, row.max(1) as usize);
+        sync_weak(&weak, &callback_state);
+    });
 
-fn configure_fonts(ctx: &egui::Context) {
-    let candidates = [
-        r"C:\Windows\Fonts\msyh.ttc",
-        r"C:\Windows\Fonts\simhei.ttf",
-        r"C:\Windows\Fonts\simsun.ttc",
-    ];
-    let Some(bytes) = candidates.iter().find_map(|path| std::fs::read(path).ok()) else {
-        return;
-    };
-    let mut fonts = FontDefinitions::default();
-    fonts
-        .font_data
-        .insert("windows_cjk".to_owned(), FontData::from_owned(bytes).into());
-    fonts
-        .families
-        .entry(FontFamily::Proportional)
-        .or_default()
-        .insert(0, "windows_cjk".to_owned());
-    fonts
-        .families
-        .entry(FontFamily::Monospace)
-        .or_default()
-        .push("windows_cjk".to_owned());
-    ctx.set_fonts(fonts);
-}
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_mode_changed(move |mode| {
+        callback_state.borrow_mut().mode = match mode {
+            1 => MergeMode::Intersection,
+            2 => MergeMode::Manual,
+            _ => MergeMode::Union,
+        };
+        sync_weak(&weak, &callback_state);
+    });
 
-fn configure_style(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::light();
-    visuals.panel_fill = Color32::from_rgb(241, 245, 249);
-    visuals.window_fill = Color32::WHITE;
-    visuals.selection.bg_fill = BLUE;
-    visuals.widgets.inactive.bg_fill = Color32::WHITE;
-    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(248, 250, 252);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    visuals.widgets.hovered.bg_fill = SOFT_BLUE;
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, BLUE);
-    ctx.set_visuals(visuals);
-    ctx.style_mut(|style| {
-        style.spacing.item_spacing = Vec2::new(9.0, 8.0);
-        style.spacing.button_padding = Vec2::new(14.0, 8.0);
-        style.text_styles.insert(egui::TextStyle::Body, FontId::proportional(14.0));
-        style.text_styles.insert(egui::TextStyle::Button, FontId::proportional(14.0));
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_include_source_file_changed(move |enabled| {
+        callback_state.borrow_mut().include_source_file = enabled;
+        sync_weak(&weak, &callback_state);
+    });
+
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_include_source_sheet_changed(move |enabled| {
+        callback_state.borrow_mut().include_source_sheet = enabled;
+        sync_weak(&weak, &callback_state);
+    });
+
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_mapping_table_changed(move |position| {
+        let mut app = callback_state.borrow_mut();
+        if let Some(actual_index) = app.enabled_indices().get(position.max(0) as usize) {
+            app.selected_mapping_table = *actual_index;
+        }
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
+
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_mapping_changed(move |mapping_index, enabled, target| {
+        let mut app = callback_state.borrow_mut();
+        let table_index = app.selected_mapping_table;
+        if let Some(mapping) = app
+            .sources
+            .get_mut(table_index)
+            .and_then(|table| table.mappings.get_mut(mapping_index.max(0) as usize))
+        {
+            mapping.enabled = enabled;
+            mapping.target_name = target.to_string();
+        }
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
+
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_reset_mapping(move || {
+        let mut app = callback_state.borrow_mut();
+        let table_index = app.selected_mapping_table;
+        if let Some(table) = app.sources.get_mut(table_index) {
+            for mapping in &mut table.mappings {
+                mapping.target_name = mapping.source_name.clone();
+                mapping.enabled = true;
+            }
+        }
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
+
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_toggle_common_fields(move || {
+        let hidden = callback_state.borrow().hide_common_mappings;
+        callback_state.borrow_mut().hide_common_mappings = !hidden;
+        sync_weak(&weak, &callback_state);
+    });
+
+    let callback_state = state.clone();
+    ui.on_output_path_changed(move |path| {
+        callback_state.borrow_mut().output_path = path.to_string();
+    });
+
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_choose_output(move || {
+        if callback_state.borrow().busy() {
+            return;
+        }
+        if let Some(path) = FileDialog::new()
+            .add_filter("Excel 工作簿", &["xlsx"])
+            .set_file_name("合并结果.xlsx")
+            .save_file()
+        {
+            callback_state.borrow_mut().output_path = path.display().to_string();
+            sync_weak(&weak, &callback_state);
+        }
+    });
+
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_start_merge(move || {
+        callback_state.borrow_mut().start_merge();
+        sync_weak(&weak, &callback_state);
+    });
+
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_cancel_merge(move || {
+        let mut app = callback_state.borrow_mut();
+        app.cancel.store(true, Ordering::Relaxed);
+        app.progress_label = "正在取消…".to_owned();
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
+
+    let callback_state = state;
+    ui.on_reveal_output(move || {
+        if let AppState::Done { output, .. } = &callback_state.borrow().state {
+            reveal_in_explorer(output);
+        }
     });
 }
 
-fn card<R>(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    egui::Frame::new()
-        .fill(Color32::WHITE)
-        .stroke(Stroke::new(1.0_f32, BORDER))
-        .corner_radius(12.0)
-        .inner_margin(20.0)
-        .show(ui, content)
-        .inner
+fn sync_weak(weak: &slint::Weak<AppWindow>, state: &Rc<RefCell<MergeApp>>) {
+    if let Some(ui) = weak.upgrade() {
+        sync_ui(&ui, &state.borrow());
+    }
 }
 
-fn section_title(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(title).size(18.0).strong().color(TEXT));
-        ui.add_space(8.0);
-        ui.label(RichText::new(subtitle).size(12.0).color(MUTED));
-    });
-}
+fn sync_ui(ui: &AppWindow, app: &MergeApp) {
+    let selected_count = app.sources.iter().filter(|table| table.enabled).count();
+    let source_rows: Vec<SourceRow> = app
+        .sources
+        .iter()
+        .map(|table| SourceRow {
+            enabled: table.enabled,
+            file_name: table
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| table.path.display().to_string())
+                .into(),
+            sheet_name: table.sheet_name.clone().into(),
+            detail: format!(
+                "{} 行  ·  {} 列",
+                format_number(table.estimated_rows),
+                table.headers.len()
+            )
+            .into(),
+            header_row: table.header_row as i32,
+        })
+        .collect();
+    ui.set_sources(ModelRc::new(VecModel::from(source_rows)));
+    ui.set_input_label(app.input_label.clone().into());
+    ui.set_sources_summary(
+        format!("已识别 {} 个数据表 · 已选 {selected_count} 个", app.sources.len()).into(),
+    );
 
-fn header_step(ui: &mut egui::Ui, number: &str, label: &str, complete: bool) {
-    let fill = if complete {
-        Color32::from_rgb(59, 130, 246)
-    } else {
-        Color32::from_rgb(51, 65, 85)
+    let enabled_indices = app.enabled_indices();
+    let mapping_names: Vec<SharedString> = enabled_indices
+        .iter()
+        .map(|index| app.sources[*index].display_name().into())
+        .collect();
+    ui.set_mapping_tables(ModelRc::new(VecModel::from(mapping_names)));
+    let mapping_position = enabled_indices
+        .iter()
+        .position(|index| *index == app.selected_mapping_table)
+        .unwrap_or(0);
+    ui.set_mapping_table_index(mapping_position as i32);
+
+    let common_headers = common_header_keys(&app.sources);
+    let (mapping_rows, common_count) = app
+        .sources
+        .get(app.selected_mapping_table)
+        .map(|table| {
+            let common_count = table
+                .mappings
+                .iter()
+                .filter(|mapping| common_headers.contains(&header_key(&mapping.source_name)))
+                .count();
+            let rows = table
+                .mappings
+                .iter()
+                .enumerate()
+                .filter(|(_, mapping)| {
+                    !app.hide_common_mappings
+                        || !common_headers.contains(&header_key(&mapping.source_name))
+                })
+                .map(|(index, mapping)| MappingRow {
+                    enabled: mapping.enabled,
+                    mapping_index: index as i32,
+                    source_name: mapping.source_name.clone().into(),
+                    target_name: mapping.target_name.clone().into(),
+                })
+                .collect::<Vec<_>>();
+            (rows, common_count)
+        })
+        .unwrap_or_default();
+    ui.set_mappings(ModelRc::new(VecModel::from(mapping_rows)));
+    ui.set_common_fields_label(
+        if app.hide_common_mappings {
+            format!("显示共有字段（已隐藏 {common_count} 项）")
+        } else {
+            format!("隐藏共有字段（{common_count} 项）")
+        }
+        .into(),
+    );
+
+    let options = MergeOptions {
+        mode: app.mode,
+        include_source_file: app.include_source_file,
+        include_source_sheet: app.include_source_sheet,
     };
-    egui::Frame::new()
-        .fill(fill)
-        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(96, 165, 250)))
-        .corner_radius(18.0)
-        .inner_margin(8.0)
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new(format!("{number}  {label}"))
-                    .size(12.0)
-                    .strong()
-                    .color(Color32::WHITE),
-            );
-        });
-}
+    let plan = build_output_plan(&app.sources, &options);
+    let rows: u64 = app
+        .sources
+        .iter()
+        .filter(|table| table.enabled)
+        .map(|table| table.estimated_rows)
+        .sum();
+    let expected_sheets = ((rows.max(1) - 1) / XLSX_MAX_DATA_ROWS as u64) + 1;
 
-fn compact_metric(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.label(RichText::new(label).size(11.0).color(MUTED));
-    ui.label(RichText::new(value).strong().color(TEXT));
-}
+    ui.set_mode_index(match app.mode {
+        MergeMode::Union => 0,
+        MergeMode::Intersection => 1,
+        MergeMode::Manual => 2,
+    });
+    ui.set_include_source_file(app.include_source_file);
+    ui.set_include_source_sheet(app.include_source_sheet);
+    ui.set_output_path(app.output_path.clone().into());
+    ui.set_rows_metric(format_number(rows).into());
+    ui.set_columns_metric(plan.headers.len().to_string().into());
+    ui.set_sheets_metric(expected_sheets.to_string().into());
+    ui.set_progress(app.progress);
+    ui.set_busy(app.busy());
+    ui.set_has_sources(!app.sources.is_empty());
+    ui.set_can_start(
+        !app.busy()
+            && app.sources.iter().any(|table| table.enabled)
+            && !plan.headers.is_empty(),
+    );
 
-fn primary_button(label: &str, width: f32) -> egui::Button<'_> {
-    egui::Button::new(RichText::new(label).strong().color(Color32::WHITE))
-        .fill(BLUE)
-        .stroke(Stroke::NONE)
-        .min_size(Vec2::new(width, 38.0))
-}
-
-fn secondary_button(label: &str, width: f32) -> egui::Button<'_> {
-    egui::Button::new(RichText::new(label).color(TEXT))
-        .fill(Color32::WHITE)
-        .stroke(Stroke::new(1.0_f32, BORDER))
-        .min_size(Vec2::new(width, 38.0))
+    let (status_text, status_kind, can_reveal) = match &app.state {
+        AppState::Done {
+            rows,
+            sheets,
+            ..
+        } => (
+            format!("合并成功：{} 行，{} 个 Sheet", format_number(*rows), sheets),
+            1,
+            true,
+        ),
+        AppState::Error(message) => (message.clone(), 2, false),
+        _ if !app.progress_label.is_empty() => (app.progress_label.clone(), 0, false),
+        _ if !app.warnings.is_empty() => (
+            format!("{} 个文件或工作表未能读取", app.warnings.len()),
+            2,
+            false,
+        ),
+        _ => (format!("当前模式：{}", app.mode.label()), 0, false),
+    };
+    ui.set_status_text(status_text.into());
+    ui.set_status_kind(status_kind);
+    ui.set_can_reveal(can_reveal);
+    ui.set_show_progress(app.busy() || !app.progress_label.is_empty());
 }
 
 fn format_number(value: u64) -> String {
@@ -858,7 +649,9 @@ fn reveal_in_explorer(path: &Path) {
     #[cfg(target_os = "windows")]
     {
         let argument = format!("/select,{}", path.display());
-        let _ = std::process::Command::new("explorer.exe").arg(argument).spawn();
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(argument)
+            .spawn();
     }
     #[cfg(not(target_os = "windows"))]
     let _ = path;

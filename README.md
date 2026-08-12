@@ -1,6 +1,6 @@
 # SheetForge 表格工坊
 
-一个面向 Windows 的轻量原生 GUI 工具，用来批量合并 Excel / CSV 数据。使用 Rust 开发，不依赖 Python，不上传数据。
+一个面向 Windows 的现代原生 GUI 工具，用来批量合并 Excel / CSV 数据。使用 Rust + Slint 开发，不依赖 Python、不依赖浏览器内核，也不上传数据。
 
 ## 下载 Windows 成品
 
@@ -8,7 +8,7 @@
 
 ## 已实现功能
 
-- 递归扫描文件夹，也支持多选文件和拖放。
+- 递归扫描文件夹，也支持一次选择多个文件。
 - 读取 `.xlsx`、`.xlsm`、`.xls`、`.xlsb`、`.ods`、`.csv`、`.tsv`。
 - 一个工作簿中的每个非空 Sheet 都可单独勾选。
 - 每个数据表可单独选择表头所在行；调整后自动重新读取字段和数据行数。
@@ -57,8 +57,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 ## 项目结构
 
 ```text
+ui/
+  app-window.slint  现代桌面界面与自适应布局
 src/
-  app.rs      GUI、交互、后台任务状态
+  app.rs      Slint 交互桥接、后台任务状态
   scan.rs     递归发现文件、读取表头、CSV 编码与分隔符处理
   model.rs    并集/交集/手动映射的数据模型
   merge.rs    行映射、恒定内存 XLSX 写出、自动拆分 Sheet
@@ -67,7 +69,7 @@ src/
 
 ## 隐私与兼容性
 
-所有处理都在本机完成。程序不发起网络请求。首次运行未签名的自行构建版本时，Windows SmartScreen 可能显示提醒；商业分发时建议为 EXE 添加代码签名。
+所有处理都在本机完成。程序不发起网络请求。首次运行未签名的自行构建版本时，Windows SmartScreen 可能显示提醒；商业分发时建议为 EXE 添加代码签名。界面使用 Slint，并在应用顶部显示其许可要求的归属标识。
 
 ## License
 
