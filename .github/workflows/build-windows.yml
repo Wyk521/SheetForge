@@ -1,0 +1,40 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: rustup default stable
+
+      - name: Test
+        run: cargo test
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\SheetForge-Windows-x64 | Out-Null
+          Copy-Item target\release\SheetForge.exe dist\SheetForge-Windows-x64\
+          Copy-Item README.md dist\SheetForge-Windows-x64\
+          Copy-Item LICENSE dist\SheetForge-Windows-x64\
+          Compress-Archive -Path dist\SheetForge-Windows-x64\* -DestinationPath dist\SheetForge-Windows-x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SheetForge-Windows-x64
+          path: dist/SheetForge-Windows-x64.zip
+          if-no-files-found: error
