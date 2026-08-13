@@ -95,7 +95,7 @@ export component AppWindow inherits Window {
     in-out property <bool> show-about: false;
 
     callback choose-folder(); callback choose-files(); callback source-enabled-changed(int, bool); callback select-all-sources(bool);
-    callback toggle-source-group(string); callback source-group-enabled-changed(string, bool); callback remove-source-group(string);
+    callback toggle-source-group(string); callback source-group-enabled-changed(string, bool); callback apply-source-group-header(string); callback remove-source-group(string);
     callback remove-source(int); callback header-changed(int, int, int); callback source-search-changed(string);
     callback mode-changed(int); callback include-source-file-changed(bool); callback include-source-sheet-changed(bool);
     callback mapping-table-changed(int); callback mapping-changed(int, bool, string); callback mapping-operation-changed(int, int, int);
@@ -161,6 +161,7 @@ export component AppWindow inherits Window {
                                 Text { width: 18px; text: source.collapsed ? "›" : "⌄"; color: #2563eb; font-size: 18px; vertical-alignment: center; }
                                 Text { horizontal-stretch: 1; text: source.file-name; color: #1e3a5f; font-size: 13px; font-weight: 700; vertical-alignment: center; overflow: elide; }
                                 Text { text: source.detail; color: #64748b; font-size: 11px; vertical-alignment: center; }
+                                ActionButton { width: 82px; height: 28px; text: "统一表头"; enabled: !root.busy; clicked => { root.apply-source-group-header(source.path); } }
                                 ActionButton { width: 72px; height: 28px; text: source.collapsed ? "展开" : "收起"; clicked => { root.toggle-source-group(source.path); } }
                                 ActionButton { width: 68px; height: 28px; text: "移除整簿"; enabled: !root.busy; clicked => { root.remove-source-group(source.path); } }
                             }

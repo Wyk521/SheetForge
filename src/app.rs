@@ -11,7 +11,9 @@ use crate::model::{
     build_output_plan, common_header_keys, header_key, AggregateOp, JoinKind, MergeMode,
     MergeOptions, SourceTable, TransformOp,
 };
-use crate::scan::{collect_folder, spawn_scan, spawn_table_reload, supported_file, ScanEvent};
+use crate::scan::{
+    collect_folder, spawn_group_reload, spawn_scan, spawn_table_reload, supported_file, ScanEvent,
+};
 use crate::{AppWindow, CheckRow, ColumnRow, MappingRow, PreviewRow, SourceRow};
 use rfd::FileDialog;
 use slint::{ComponentHandle, DataTransfer, ModelRc, SharedString, Timer, TimerMode, VecModel};
@@ -185,6 +187,27 @@ impl MergeApp {
         );
         spawn_table_reload(index, source, header_row, header_rows, tx);
     }
+    fn start_group_reload(&mut self, path: &str) {
+        let sources = self
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(_, table)| table.path.display().to_string() == path)
+            .map(|(index, table)| (index, table.clone()))
+            .collect::<Vec<_>>();
+        let Some((_, first)) = sources.first() else {
+            return;
+        };
+        let header_row = first.header_row;
+        let header_rows = first.header_rows;
+        let (tx, rx) = mpsc::channel();
+        self.scan_rx = Some(rx);
+        self.state = AppState::Scanning;
+        self.progress = 0.15;
+        self.progress_label =
+            format!("正在把第 {header_row} 行、{header_rows} 层表头应用到整本工作簿…");
+        spawn_group_reload(sources, header_row, header_rows, tx);
+    }
     fn start_merge(&mut self) {
         let output = PathBuf::from(self.output_path.trim());
         if output.as_os_str().is_empty() {
@@ -336,6 +359,20 @@ impl MergeApp {
                     self.check_issues.clear();
                     self.progress = 1.0;
                     self.progress_label = format!("表头已刷新：{name}");
+                    self.state = AppState::Ready;
+                    self.scan_rx = None;
+                }
+                ScanEvent::TablesReloaded { tables } => {
+                    let count = tables.len();
+                    for (index, table) in tables {
+                        if let Some(slot) = self.sources.get_mut(index) {
+                            *slot = table;
+                        }
+                    }
+                    self.preview = None;
+                    self.check_issues.clear();
+                    self.progress = 1.0;
+                    self.progress_label = format!("已统一刷新 {count} 个数据表的表头");
                     self.state = AppState::Ready;
                     self.scan_rx = None;
                 }
@@ -603,6 +640,12 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
         }
         app.ensure_mapping_selection();
         drop(app);
+        sync_weak(&weak, &callback_state);
+    });
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_apply_source_group_header(move |path| {
+        callback_state.borrow_mut().start_group_reload(path.as_str());
         sync_weak(&weak, &callback_state);
     });
     let weak = ui.as_weak();

@@ -30,6 +30,9 @@ pub enum ScanEvent {
         index: usize,
         table: SourceTable,
     },
+    TablesReloaded {
+        tables: Vec<(usize, SourceTable)>,
+    },
     TableReloadFailed {
         index: usize,
         message: String,
@@ -172,6 +175,50 @@ pub fn spawn_table_reload(
                 });
             }
         }
+    });
+}
+
+pub fn spawn_group_reload(
+    sources: Vec<(usize, SourceTable)>,
+    header_row: usize,
+    header_rows: usize,
+    tx: Sender<ScanEvent>,
+) {
+    std::thread::spawn(move || {
+        let mut tables = Vec::with_capacity(sources.len());
+        for (index, source) in sources {
+            let result = match source.kind {
+                SourceKind::Csv { delimiter } => scan_csv(
+                    &source.path,
+                    delimiter,
+                    header_row,
+                    header_rows,
+                    source.suggested_header_row,
+                ),
+                SourceKind::Workbook => scan_workbook_sheet(
+                    &source.path,
+                    &source.sheet_name,
+                    header_row,
+                    header_rows,
+                    source.suggested_header_row,
+                ),
+            };
+            match result {
+                Ok(mut table) => {
+                    table.enabled = source.enabled;
+                    preserve_mappings(&source, &mut table);
+                    tables.push((index, table));
+                }
+                Err(error) => {
+                    let _ = tx.send(ScanEvent::TableReloadFailed {
+                        index,
+                        message: format!("{}：{error:#}", source.display_name()),
+                    });
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(ScanEvent::TablesReloaded { tables });
     });
 }
 
