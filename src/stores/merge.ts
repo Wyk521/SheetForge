@@ -479,9 +479,6 @@ export const useMergeStore = defineStore("merge", () => {
   async function loadState() {
     const state = await invoke<{ settings: AppSettings }>("get_state");
     settings.value = state.settings;
-    if (!outputPath.value.trim() && state.settings.output_directory) {
-      outputPath.value = `${state.settings.output_directory}\\合并结果.xlsx`;
-    }
   }
 
   // ---- 事件桥（启动时调用一次） ----
