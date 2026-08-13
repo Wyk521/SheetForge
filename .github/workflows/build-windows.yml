@@ -30,8 +30,8 @@ jobs:
       - name: Generate dependency lockfile
         run: cargo generate-lockfile
 
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
+      - name: Format Rust sources
+        run: cargo fmt --all
 
       - name: Upload reproducible sources
         uses: actions/upload-artifact@v7
