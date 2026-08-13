@@ -745,6 +745,7 @@ checksum = "5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3"
 dependencies = [
  "atoi_simd",
  "byteorder",
+ "chrono",
  "codepage",
  "encoding_rs",
  "fast-float2",
@@ -856,6 +857,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -4487,7 +4489,7 @@ dependencies = [
 
 [[package]]
 name = "sheetforge"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "calamine",

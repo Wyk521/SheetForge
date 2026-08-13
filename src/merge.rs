@@ -1,3 +1,4 @@
+use crate::inspect::{preflight, CheckIssue};
 use crate::model::{
     build_output_plan, header_key, source_to_output_map, AggregateOp, JoinKind, MergeMode,
     MergeOptions, OutputPlan, SourceKind, SourceTable, TransformOp,
@@ -5,7 +6,7 @@ use crate::model::{
 use crate::scan::for_each_csv_row;
 use anyhow::{anyhow, Context, Result};
 use calamine::{open_workbook_auto, Data, Reader};
-use rust_xlsxwriter::{Color, Format, FormatAlign, FormatBorder, Workbook};
+use rust_xlsxwriter::{Color, ExcelDateTime, Format, FormatAlign, FormatBorder, Workbook};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +23,9 @@ pub enum MergeEvent {
         total: u64,
         label: String,
     },
+    Preflight {
+        issues: Vec<CheckIssue>,
+    },
     Finished {
         output: PathBuf,
         rows: u64,
@@ -30,6 +34,18 @@ pub enum MergeEvent {
     Cancelled,
     Failed(String),
 }
+
+/// 用户主动取消合并时的类型化错误，用于与真正的失败区分开。
+#[derive(Debug)]
+struct MergeCancelled;
+
+impl std::fmt::Display for MergeCancelled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "合并已取消")
+    }
+}
+
+impl std::error::Error for MergeCancelled {}
 
 pub fn spawn_merge(
     tables: Vec<SourceTable>,
@@ -51,10 +67,22 @@ pub fn spawn_merge(
                 let _ = tx.send(MergeEvent::Cancelled);
             }
             Err(error) => {
-                let _ = tx.send(MergeEvent::Failed(format!("{error:#}")));
+                if error.downcast_ref::<MergeCancelled>().is_some() {
+                    let _ = tx.send(MergeEvent::Cancelled);
+                } else {
+                    let _ = tx.send(MergeEvent::Failed(format!("{error:#}")));
+                }
             }
         },
     );
+}
+
+/// 在后台线程执行合并前检查，避免大文件时冻结界面。
+pub fn spawn_preflight(tables: Vec<SourceTable>, options: MergeOptions, tx: Sender<MergeEvent>) {
+    std::thread::spawn(move || {
+        let issues = preflight(&tables, &options);
+        let _ = tx.send(MergeEvent::Preflight { issues });
+    });
 }
 
 fn merge_tables(
@@ -122,12 +150,19 @@ fn merge_appended(
                         cancel,
                     )
                 };
+                let detect_numbers = options.detect_csv_numbers;
                 for_each_csv_row(
                     &table.path,
                     delimiter,
                     table.header_row,
                     table.header_rows,
-                    |row| consume(row.into_iter().map(CellValue::Text).collect()),
+                    |row| {
+                        consume(
+                            row.into_iter()
+                                .map(|value| csv_cell(value, detect_numbers))
+                                .collect(),
+                        )
+                    },
                 )
                 .with_context(|| format!("处理 {} 时失败", table.display_name()))?;
             }
@@ -186,7 +221,7 @@ fn consume_append_row(
     cancel: &AtomicBool,
 ) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
-        return Err(anyhow!("合并已取消"));
+        return Err(MergeCancelled.into());
     }
     let output_row = mapped_row(table, values, options, plan);
     if !passes_filter(&output_row, plan, options) {
@@ -221,9 +256,9 @@ fn merge_consolidated(
     let total = tables.iter().map(|table| table.estimated_rows).sum();
     let mut current = 0;
     for table in tables {
-        for_each_table_row(table, |values| {
+        for_each_table_row(table, options.detect_csv_numbers, |values| {
             if cancel.load(Ordering::Relaxed) {
-                return Err(anyhow!("合并已取消"));
+                return Err(MergeCancelled.into());
             }
             let row = mapped_row(table, values, options, &plan);
             if passes_filter(&row, &plan, options) {
@@ -270,9 +305,9 @@ fn merge_joined(
     let mut progress = 0;
     for (table_index, table) in tables.iter().enumerate() {
         let mut incoming = HashMap::<String, Vec<CellValue>>::new();
-        for_each_table_row(table, |values| {
+        for_each_table_row(table, options.detect_csv_numbers, |values| {
             if cancel.load(Ordering::Relaxed) {
-                return Err(anyhow!("合并已取消"));
+                return Err(MergeCancelled.into());
             }
             let row = mapped_row(table, values, options, &plan);
             incoming
@@ -321,7 +356,7 @@ fn merge_joined(
     finish_sink(sink, output, count, cancel)
 }
 
-fn for_each_table_row<F>(table: &SourceTable, mut callback: F) -> Result<()>
+fn for_each_table_row<F>(table: &SourceTable, detect_numbers: bool, mut callback: F) -> Result<()>
 where
     F: FnMut(Vec<CellValue>) -> Result<()>,
 {
@@ -331,7 +366,13 @@ where
             delimiter,
             table.header_row,
             table.header_rows,
-            |row| callback(row.into_iter().map(CellValue::Text).collect()),
+            |row| {
+                callback(
+                    row.into_iter()
+                        .map(|value| csv_cell(value, detect_numbers))
+                        .collect(),
+                )
+            },
         ),
         SourceKind::Workbook => {
             let mut workbook = open_workbook_auto(&table.path)?;
@@ -503,7 +544,7 @@ fn send_progress(current: u64, total: u64, label: String, tx: &Sender<MergeEvent
         let _ = tx.send(MergeEvent::Progress {
             current,
             total,
-            label,
+            label: format!("正在合并：{label}"),
         });
     }
 }
@@ -529,6 +570,15 @@ enum CellValue {
     Integer(i64),
     Number(f64),
     Boolean(bool),
+    /// Excel 日期/时间，由源文件解析出的年月日时分秒组成。
+    DateTime {
+        year: u16,
+        month: u8,
+        day: u8,
+        hour: u8,
+        minute: u8,
+        second: u8,
+    },
 }
 
 impl CellValue {
@@ -542,6 +592,24 @@ impl CellValue {
             Self::Integer(v) => v.to_string(),
             Self::Number(v) => v.to_string(),
             Self::Boolean(v) => v.to_string(),
+            Self::DateTime {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+            } if *hour == 0 && *minute == 0 && *second == 0 => {
+                format!("{year:04}-{month:02}-{day:02}")
+            }
+            Self::DateTime {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+            } => format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"),
         }
     }
     fn as_number(&self) -> Option<f64> {
@@ -566,11 +634,54 @@ impl CellValue {
             Data::Int(v) => Self::Integer(*v),
             Data::Float(v) => Self::Number(*v),
             Data::Bool(v) => Self::Boolean(*v),
-            Data::DateTime(v) => Self::Text(v.to_string()),
+            Data::DateTime(v) => {
+                // 时长格式（如 [hh]:mm:ss）保持数值文本。
+                if v.is_duration() {
+                    Self::Text(v.as_f64().to_string())
+                } else {
+                    let (year, month, day, hour, minute, second, _millis) = v.to_ymd_hms_milli();
+                    Self::DateTime {
+                        year,
+                        month,
+                        day,
+                        hour,
+                        minute,
+                        second,
+                    }
+                }
+            }
             Data::DateTimeIso(v) | Data::DurationIso(v) => Self::Text(v.clone()),
             Data::Error(v) => Self::Text(v.to_string()),
         }
     }
+}
+
+/// 把 CSV 文本单元格转换为数值（仅当「识别 CSV 数字」开启且整串是合法数字）。
+fn csv_cell(value: String, detect_numbers: bool) -> CellValue {
+    if detect_numbers && looks_like_number(&value) {
+        if let Ok(number) = value.trim().parse::<f64>() {
+            if number.is_finite() {
+                return CellValue::Number(number);
+            }
+        }
+    }
+    CellValue::Text(value)
+}
+
+fn looks_like_number(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // 排除前导零（如 "007"），避免把编号当数字；"0"、"0.5" 不受影响。
+    if trimmed.len() > 1 && trimmed.starts_with('0') && trimmed.as_bytes()[1].is_ascii_digit() {
+        return false;
+    }
+    // 排除千分位（"1,234"）和带空格的对齐数字。
+    if trimmed.contains(',') || trimmed.contains(' ') {
+        return false;
+    }
+    trimmed.parse::<f64>().is_ok()
 }
 
 struct XlsxSink {
@@ -635,13 +746,44 @@ impl XlsxSink {
                     worksheet.write_string(excel_row, column as u16, v)?;
                 }
                 CellValue::Integer(v) => {
-                    worksheet.write_number(excel_row, column as u16, *v as f64)?;
+                    // f64 只能精确表示 2^53 以内的整数；超出的整数值（如 18 位
+                    // 编号）以文本写出，避免尾数被静默截断。
+                    if (*v as f64) as i64 == *v {
+                        worksheet.write_number(excel_row, column as u16, *v as f64)?;
+                    } else {
+                        worksheet.write_string(excel_row, column as u16, v.to_string())?;
+                    }
                 }
                 CellValue::Number(v) => {
                     worksheet.write_number(excel_row, column as u16, *v)?;
                 }
                 CellValue::Boolean(v) => {
                     worksheet.write_boolean(excel_row, column as u16, *v)?;
+                }
+                CellValue::DateTime {
+                    year,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    second,
+                } => {
+                    let datetime = ExcelDateTime::from_ymd(*year, *month, *day)?.and_hms(
+                        *hour as u16,
+                        *minute,
+                        *second,
+                    )?;
+                    let format = if *hour == 0 && *minute == 0 && *second == 0 {
+                        Format::new().set_num_format("yyyy-mm-dd")
+                    } else {
+                        Format::new().set_num_format("yyyy-mm-dd hh:mm:ss")
+                    };
+                    worksheet.write_datetime_with_format(
+                        excel_row,
+                        column as u16,
+                        &datetime,
+                        &format,
+                    )?;
                 }
             }
         }
@@ -734,5 +876,78 @@ mod tests {
             merge_tables(&[table], &MergeOptions::default(), &output, &tx, &cancel).unwrap();
         assert!(result.is_none());
         assert!(!output.exists());
+    }
+    #[test]
+    fn csv_number_detection_is_conservative() {
+        assert!(matches!(
+            csv_cell("12.5".into(), true),
+            CellValue::Number(_)
+        ));
+        assert!(matches!(csv_cell("007".into(), true), CellValue::Text(_)));
+        assert!(matches!(csv_cell("1,234".into(), true), CellValue::Text(_)));
+        assert!(matches!(csv_cell("1 234".into(), true), CellValue::Text(_)));
+        assert!(matches!(csv_cell("abc".into(), true), CellValue::Text(_)));
+        assert!(matches!(csv_cell("".into(), true), CellValue::Text(_)));
+        assert!(matches!(csv_cell("0.5".into(), true), CellValue::Number(_)));
+        assert!(matches!(csv_cell("12".into(), true), CellValue::Number(_)));
+        assert!(matches!(csv_cell("12".into(), false), CellValue::Text(_)));
+    }
+    #[test]
+    fn excel_datetime_components_format_and_round_trip() {
+        let date = CellValue::DateTime {
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert_eq!(date.as_text(), "2024-01-01");
+        let datetime = CellValue::DateTime {
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 6,
+            minute: 30,
+            second: 0,
+        };
+        assert_eq!(datetime.as_text(), "2024-01-01 06:30:00");
+
+        let plan = OutputPlan {
+            headers: vec!["日期".to_owned()],
+            source_file_column: None,
+            source_sheet_column: None,
+        };
+        let mut sink = XlsxSink::new_with_limit(plan, 10).unwrap();
+        sink.write_row(&[date]).unwrap();
+        let output = std::env::temp_dir().join(format!("datetime-{}.xlsx", std::process::id()));
+        sink.save(&output).unwrap();
+        let mut workbook = open_workbook_auto(&output).unwrap();
+        let range = workbook.worksheet_range("合并结果_001").unwrap();
+        match range.get_value((1, 0)) {
+            Some(Data::DateTime(value)) => assert_eq!(value.as_f64(), 45_292.0),
+            other => panic!("expected DateTime cell, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(output);
+    }
+    #[test]
+    fn large_integers_fall_back_to_text() {
+        let plan = OutputPlan {
+            headers: vec!["id".to_owned()],
+            source_file_column: None,
+            source_sheet_column: None,
+        };
+        let mut sink = XlsxSink::new_with_limit(plan, 10).unwrap();
+        let huge = 9_007_199_254_740_993_i64; // 2^53 + 1，f64 无法精确表示
+        sink.write_row(&[CellValue::Integer(huge)]).unwrap();
+        let output = std::env::temp_dir().join(format!("big-int-{}.xlsx", std::process::id()));
+        sink.save(&output).unwrap();
+        let mut workbook = open_workbook_auto(&output).unwrap();
+        let range = workbook.worksheet_range("合并结果_001").unwrap();
+        match range.get_value((1, 0)) {
+            Some(Data::String(value)) => assert_eq!(value, "9007199254740993"),
+            other => panic!("expected text fallback, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(output);
     }
 }

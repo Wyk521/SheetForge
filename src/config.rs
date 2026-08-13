@@ -47,6 +47,14 @@ pub fn load_scheme(path: &Path) -> Result<MergeScheme> {
     if scheme.format_version > 1 {
         anyhow::bail!("该方案由更高版本的软件创建，当前版本无法读取");
     }
+    for table in &scheme.tables {
+        if table.header_row == 0 || table.header_rows == 0 || table.header_rows > 3 {
+            anyhow::bail!(
+                "方案中“{}”的表头设置无效（开始行需 ≥ 1，占用行数需为 1–3）",
+                table.display_name()
+            );
+        }
+    }
     Ok(scheme)
 }
 
@@ -99,4 +107,52 @@ fn app_data_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("表格合并")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{make_default_mappings, SourceKind};
+
+    fn scheme_with_header(header_row: usize, header_rows: usize) -> MergeScheme {
+        let headers = vec!["姓名".to_owned()];
+        MergeScheme {
+            format_version: 1,
+            name: "测试方案".to_owned(),
+            tables: vec![SourceTable {
+                path: PathBuf::from("a.csv"),
+                sheet_name: "CSV".to_owned(),
+                kind: SourceKind::Csv { delimiter: b',' },
+                header_row,
+                header_rows,
+                suggested_header_row: 1,
+                mappings: make_default_mappings(&headers),
+                headers,
+                estimated_rows: 0,
+                enabled: true,
+            }],
+            options: MergeOptions::default(),
+        }
+    }
+
+    #[test]
+    fn valid_scheme_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ok.json");
+        save_scheme(&path, &scheme_with_header(1, 1)).unwrap();
+        assert!(load_scheme(&path).is_ok());
+    }
+
+    #[test]
+    fn invalid_header_settings_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        for (header_row, header_rows) in [(0, 1), (1, 0), (1, 4)] {
+            let path = directory
+                .path()
+                .join(format!("{header_row}-{header_rows}.json"));
+            save_scheme(&path, &scheme_with_header(header_row, header_rows)).unwrap();
+            let error = load_scheme(&path).unwrap_err().to_string();
+            assert!(error.contains("表头设置无效"), "{error}");
+        }
+    }
 }

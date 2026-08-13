@@ -1,4 +1,4 @@
-import { AboutSlint, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator } from "std-widgets.slint";
+import { AboutSlint, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, ScrollView } from "std-widgets.slint";
 
 export struct SourceRow {
     is-group: bool,
@@ -24,7 +24,7 @@ export struct MappingRow {
     aggregate-index: int,
 }
 
-export struct PreviewRow { line-number: string, cells: string, header: bool }
+export struct PreviewRow { line-number: string, cells: [string], header: bool }
 export struct CheckRow { level: int, title: string, detail: string }
 export struct ColumnRow { column-index: int, name: string }
 
@@ -102,9 +102,11 @@ export component AppWindow inherits Window {
 
     in property <[SourceRow]> sources; in property <[string]> mapping-tables; in property <[MappingRow]> mappings;
     in property <[PreviewRow]> preview-rows; in property <[CheckRow]> check-rows; in property <[ColumnRow]> output-columns;
+    in property <[length]> preview-column-widths; in property <string> app-version: "0.0.0";
     in-out property <string> output-path; in-out property <int> mode-index: 0; in-out property <int> mapping-table-index: 0;
     in-out property <int> preview-table-index: 0; in-out property <int> active-page: 0; in-out property <int> preview-mode: 0;
     in-out property <bool> include-source-file: false; in-out property <bool> include-source-sheet: false;
+    in-out property <bool> detect-csv-numbers: true;
     in-out property <bool> deduplicate: false; in-out property <bool> filter-exclude: false; in-out property <int> join-kind-index: 0;
     in-out property <string> source-search; in-out property <string> mapping-search; in-out property <bool> mismatch-only: false;
     in-out property <string> key-columns; in-out property <string> filter-column; in-out property <string> filter-text;
@@ -118,7 +120,7 @@ export component AppWindow inherits Window {
     callback choose-folder(); callback choose-files(); callback source-enabled-changed(int, bool); callback select-all-sources(bool);
     callback toggle-source-group(string); callback source-group-enabled-changed(string, bool); callback apply-source-group-header(string); callback remove-source-group(string);
     callback remove-source(int); callback header-changed(int, int, int); callback source-search-changed(string);
-    callback mode-changed(int); callback include-source-file-changed(bool); callback include-source-sheet-changed(bool);
+    callback mode-changed(int); callback include-source-file-changed(bool); callback include-source-sheet-changed(bool); callback detect-csv-numbers-changed(bool);
     callback mapping-table-changed(int); callback mapping-changed(int, bool, string); callback mapping-operation-changed(int, int, int);
     callback reset-mapping(); callback toggle-common-fields(); callback mapping-search-changed(string); callback mismatch-only-changed(bool); callback apply-suggestions();
     callback advanced-options-changed(string, bool, string, string, bool, int); callback move-output-column(int, int);
@@ -144,13 +146,14 @@ export component AppWindow inherits Window {
         }
 
         Rectangle { vertical-stretch: 1; background: #f1f5f9;
-            DropArea {
+            drop-area := DropArea {
                 width: 100%; height: 100%;
                 enabled: !root.busy;
                 can-drop(event) => { return root.can-drop(event.data) ? DragAction.copy : DragAction.none; }
                 dropped(event) => { root.files-dropped(event.data); return DragAction.copy; }
             }
             if root.active-page == 0: Surface { x: 16px; y: 14px; width: parent.width - 32px; height: parent.height - 28px;
+                border-width: drop-area.has-drag ? 2px : 1px; border-color: drop-area.has-drag ? #2563eb : #dbe3ee;
                 VerticalLayout { padding: 16px; spacing: 9px;
                     HorizontalLayout { spacing: 9px;
                         VerticalLayout { horizontal-stretch: 1; spacing: 1px;
@@ -166,9 +169,9 @@ export component AppWindow inherits Window {
                         ActionButton { width: 58px; height: 32px; text: "全选"; enabled: root.has-sources && !root.busy; clicked => { root.select-all-sources(true); } }
                         ActionButton { width: 72px; height: 32px; text: "全不选"; enabled: root.has-sources && !root.busy; clicked => { root.select-all-sources(false); } }
                     }
-                    if !root.has-sources: Rectangle { vertical-stretch: 1; border-radius: 10px; border-width: 1px; border-color: #bfdbfe; background: #f8fbff;
+                    if !root.has-sources: Rectangle { vertical-stretch: 1; border-radius: 10px; border-width: drop-area.has-drag ? 2px : 1px; border-color: drop-area.has-drag ? #2563eb : #bfdbfe; background: drop-area.has-drag ? #dbeafe : #f8fbff;
                         VerticalLayout { alignment: center; spacing: 7px;
-                            Text { text: "把 Excel / CSV 拖到这里"; horizontal-alignment: center; color: #334155; font-size: 17px; font-weight: 650; }
+                            Text { text: drop-area.has-drag ? "松开以添加表格文件" : "把 Excel / CSV 拖到这里"; horizontal-alignment: center; color: drop-area.has-drag ? #1d4ed8 : #334155; font-size: 17px; font-weight: 650; }
                             Text { text: "也可以选择文件夹，软件会递归查找所有支持的工作簿"; horizontal-alignment: center; color: #64748b; font-size: 12px; }
                         }
                     }
@@ -220,6 +223,7 @@ export component AppWindow inherits Window {
                             OptionToggle { title: "记录来源文件"; description: "输出中增加文件名列"; checked: root.include-source-file; toggled(value) => { root.include-source-file = value; root.include-source-file-changed(value); } }
                             OptionToggle { title: "记录来源工作表"; description: "输出中增加 Sheet 名列"; checked: root.include-source-sheet; toggled(value) => { root.include-source-sheet = value; root.include-source-sheet-changed(value); } }
                             OptionToggle { title: "删除重复行"; description: "有键字段时按键，否则按整行"; checked: root.deduplicate; toggled(value) => { root.deduplicate = value; root.advanced-options-changed(root.key-columns, value, root.filter-column, root.filter-text, root.filter-exclude, root.join-kind-index); } }
+                            OptionToggle { title: "识别 CSV 数字"; description: "把 CSV 中纯数字的单元格按数值输出"; checked: root.detect-csv-numbers; toggled(value) => { root.detect-csv-numbers = value; root.detect-csv-numbers-changed(value); } }
                             Text { text: "键字段（多个用英文逗号分隔）"; color: #334155; font-size: 11px; font-weight: 600; }
                             LineEdit { text: root.key-columns; placeholder-text: "例如：订单号, 日期"; edited(value) => { root.key-columns = value; root.advanced-options-changed(value, root.deduplicate, root.filter-column, root.filter-text, root.filter-exclude, root.join-kind-index); } }
                             if root.mode-index == 4: HorizontalLayout { spacing: 5px;
@@ -283,11 +287,23 @@ export component AppWindow inherits Window {
                     if root.preview-mode == 1: HorizontalLayout { Text { horizontal-stretch: 1; text: "按当前规则显示前 30 行；正式导出仍采用流式处理"; color: #64748b; font-size: 11px; } ActionButton { width: 92px; text: "刷新预览"; clicked => { root.preview-merged(); } } }
                     if root.preview-mode == 2: HorizontalLayout { Text { horizontal-stretch: 1; text: root.check-summary; color: #475569; font-size: 11px; } ActionButton { width: 92px; text: "重新检查"; clicked => { root.run-check(); } } ActionButton { width: 104px; text: "导出报告"; clicked => { root.export-check(); } } }
                     Text { text: root.preview-title; color: #334155; font-size: 12px; font-weight: 650; overflow: elide; }
-                    if root.preview-mode != 2: preview-list := ListView { vertical-stretch: 1;
-                        for row in root.preview-rows: Rectangle { width: preview-list.width - 4px; height: 34px; background: row.header ? #eaf2ff : #ffffff; border-width: 1px; border-color: #eef2f7;
-                            HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 8px;
-                                Text { width: 42px; text: row.line-number; color: #94a3b8; font-size: 10px; vertical-alignment: center; horizontal-alignment: right; }
-                                Text { horizontal-stretch: 1; text: row.cells; color: row.header ? #1e3a5f : #334155; font-size: 11px; font-family: "Consolas"; font-weight: row.header ? 700 : 450; vertical-alignment: center; overflow: elide; }
+                    if root.preview-mode != 2: ScrollView { vertical-stretch: 1; horizontal-scrollbar-policy: ScrollBarPolicy.as-needed;
+                        VerticalLayout {
+                            for row in root.preview-rows: Rectangle { height: 34px; background: row.header ? #eaf2ff : #ffffff;
+                                HorizontalLayout { spacing: 0px;
+                                    Rectangle { width: 52px; background: row.header ? #dbeafe : #f8fafc; border-width: 1px; border-color: #eef2f7;
+                                        HorizontalLayout { padding-right: 7px;
+                                            Text { text: row.line-number; color: #94a3b8; font-size: 10px; vertical-alignment: center; horizontal-alignment: right; }
+                                        }
+                                    }
+                                    for cell[col] in row.cells: Rectangle { width: root.preview-column-widths[col]; border-width: 1px; border-color: #f1f5f9;
+                                        TouchArea { width: 100%; height: 100%; mouse-cursor: text;
+                                            HorizontalLayout { padding-left: 6px; padding-right: 6px;
+                                                Text { text: cell; color: row.header ? #1e3a5f : #334155; font-size: 11px; font-family: "Consolas"; font-weight: row.header ? 700 : 450; vertical-alignment: center; overflow: elide; }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -313,7 +329,10 @@ export component AppWindow inherits Window {
                     if root.busy: ActionButton { width: 76px; text: "取消"; clicked => { root.cancel-merge(); } }
                     ActionButton { width: 142px; text: root.busy ? "正在处理…" : "开始合并"; primary: true; enabled: root.can-start; clicked => { root.start-merge(); } }
                 }
-                if root.show-progress: ProgressIndicator { height: 7px; progress: root.progress; indeterminate: root.busy && root.progress <= 0; }
+                if root.show-progress: HorizontalLayout { spacing: 8px;
+                    ProgressIndicator { horizontal-stretch: 1; height: 7px; progress: root.progress; indeterminate: root.busy && root.progress <= 0; }
+                    Text { width: 42px; text: Math.round(root.progress * 100) + "%"; color: #64748b; font-size: 10px; vertical-alignment: center; horizontal-alignment: right; }
+                }
                 HorizontalLayout { spacing: 8px;
                     Text { horizontal-stretch: 1; text: root.status-text; color: root.status-kind == 1 ? #15803d : root.status-kind == 2 ? #b91c1c : #64748b; font-size: 11px; font-weight: root.status-kind == 0 ? 450 : 650; wrap: word-wrap; }
                     if root.can-reveal: ActionButton { width: 112px; height: 28px; text: "在文件夹中显示"; clicked => { root.reveal-output(); } }
@@ -325,7 +344,7 @@ export component AppWindow inherits Window {
     if root.show-about: Rectangle { width: 100%; height: 100%; background: #0f172a99; TouchArea { }
         Rectangle { width: 420px; height: 300px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; border-radius: 16px; border-width: 1px; border-color: #cbd5e1; background: #ffffff;
             VerticalLayout { padding: 22px; spacing: 10px;
-                HorizontalLayout { Image { width: 40px; height: 40px; source: @image-url("../assets/app-icon.svg"); } VerticalLayout { horizontal-stretch: 1; Text { text: "表格合并"; color: #0f172a; font-size: 20px; font-weight: 700; } Text { text: "v0.3.0  ·  本地批量表格工具"; color: #64748b; font-size: 11px; } } }
+                HorizontalLayout { Image { width: 40px; height: 40px; source: @image-url("../assets/app-icon.svg"); } VerticalLayout { horizontal-stretch: 1; Text { text: "表格合并"; color: #0f172a; font-size: 20px; font-weight: 700; } Text { text: "v" + root.app-version + "  ·  本地批量表格工具"; color: #64748b; font-size: 11px; } } }
                 AboutSlint { vertical-stretch: 1; }
                 HorizontalLayout { spacing: 7px; ActionButton { horizontal-stretch: 1; height: 34px; text: root.update-text; clicked => { root.check-update(); } } ActionButton { width: 86px; height: 34px; text: "查看日志"; clicked => { root.open-log(); } } ActionButton { width: 72px; height: 34px; text: "关闭"; primary: true; clicked => { root.show-about = false; } } }
             }

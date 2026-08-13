@@ -3,10 +3,9 @@ use crate::config::{
     AppSettings, MergeScheme,
 };
 use crate::inspect::{
-    mapping_suggestions, preflight, preview_merged, preview_source, CheckIssue, IssueLevel,
-    PreviewTable,
+    mapping_suggestions, preview_merged, preview_source, CheckIssue, IssueLevel, PreviewTable,
 };
-use crate::merge::{spawn_merge, MergeEvent, XLSX_MAX_DATA_ROWS};
+use crate::merge::{spawn_merge, spawn_preflight, MergeEvent, XLSX_MAX_DATA_ROWS};
 use crate::model::{
     build_output_plan, common_header_keys, header_key, AggregateOp, JoinKind, MergeMode,
     MergeOptions, SourceTable, TransformOp,
@@ -29,6 +28,7 @@ use std::time::Duration;
 enum AppState {
     Ready,
     Scanning,
+    Checking,
     Merging,
     Done {
         output: PathBuf,
@@ -64,6 +64,9 @@ struct MergeApp {
     update_url: Option<String>,
     cancel: Arc<AtomicBool>,
     state: AppState,
+    /// preflight 通过后是否继续进入合并流程（由「开始合并」触发时为 true，
+    /// 由「检查报告」触发时为 false）。
+    preflight_continues: bool,
     progress: f32,
     progress_label: String,
     warnings: Vec<String>,
@@ -94,6 +97,7 @@ impl Default for MergeApp {
             update_url: None,
             cancel: Arc::new(AtomicBool::new(false)),
             state: AppState::Ready,
+            preflight_continues: false,
             progress: 0.0,
             progress_label: String::new(),
             warnings: Vec::new(),
@@ -104,7 +108,10 @@ impl Default for MergeApp {
 
 impl MergeApp {
     fn busy(&self) -> bool {
-        matches!(self.state, AppState::Scanning | AppState::Merging)
+        matches!(
+            self.state,
+            AppState::Scanning | AppState::Checking | AppState::Merging
+        )
     }
     fn enabled_indices(&self) -> Vec<usize> {
         self.sources
@@ -223,13 +230,24 @@ impl MergeApp {
             self.state = AppState::Error("输出文件必须使用 .xlsx 扩展名".to_owned());
             return;
         }
-        let issues = preflight(&self.sources, &self.options);
-        if let Some(issue) = issues.iter().find(|issue| issue.level == IssueLevel::Error) {
-            let message = format!("合并前检查未通过：{} — {}", issue.title, issue.detail);
-            self.check_issues = issues;
-            self.state = AppState::Error(message);
+        self.run_preflight_background(true);
+    }
+    /// 在后台线程执行合并前检查，避免大文件时冻结界面。
+    fn run_preflight_background(&mut self, continues_merge: bool) {
+        if self.busy() {
             return;
         }
+        let (tx, rx) = mpsc::channel();
+        self.merge_rx = Some(rx);
+        self.preflight_continues = continues_merge;
+        self.state = AppState::Checking;
+        self.progress = 0.0;
+        self.progress_label = "正在执行合并前检查…".to_owned();
+        spawn_preflight(self.sources.clone(), self.options.clone(), tx);
+    }
+    /// preflight 通过后真正启动合并：覆盖确认 + 后台合并线程。
+    fn begin_merge(&mut self) {
+        let output = PathBuf::from(self.output_path.trim());
         if output.exists() {
             let confirmed = rfd::MessageDialog::new()
                 .set_title("覆盖已有文件")
@@ -237,6 +255,7 @@ impl MergeApp {
                 .set_buttons(rfd::MessageButtons::YesNo)
                 .show();
             if confirmed != rfd::MessageDialogResult::Yes {
+                self.state = AppState::Ready;
                 return;
             }
         }
@@ -287,7 +306,7 @@ impl MergeApp {
         }
     }
     fn run_preflight(&mut self) {
-        self.check_issues = preflight(&self.sources, &self.options);
+        self.run_preflight_background(false);
     }
     fn start_update_check(&mut self) {
         if let Some(url) = self.update_url.clone() {
@@ -299,9 +318,10 @@ impl MergeApp {
         self.update_text = "正在检查…".to_owned();
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<(String, String)> {
+                let user_agent = format!("SheetForge/{}", env!("CARGO_PKG_VERSION"));
                 let body =
                     ureq::get("https://api.github.com/repos/Wyk521/SheetForge/releases/latest")
-                        .header("User-Agent", "SheetMerge/0.3.0")
+                        .header("User-Agent", &user_agent)
                         .call()?
                         .body_mut()
                         .read_to_string()?;
@@ -405,6 +425,36 @@ impl MergeApp {
                     };
                     self.progress_label = format!("{label}  ·  {current} / {total} 行");
                 }
+                MergeEvent::Preflight { issues } => {
+                    let errors = issues
+                        .iter()
+                        .filter(|issue| issue.level == IssueLevel::Error)
+                        .count();
+                    let warnings = issues
+                        .iter()
+                        .filter(|issue| issue.level == IssueLevel::Warning)
+                        .count();
+                    self.check_issues = issues;
+                    if let Some(issue) = self
+                        .check_issues
+                        .iter()
+                        .find(|issue| issue.level == IssueLevel::Error)
+                    {
+                        self.state = AppState::Error(format!(
+                            "合并前检查未通过：{} — {}",
+                            issue.title, issue.detail
+                        ));
+                        self.merge_rx = None;
+                    } else if self.preflight_continues {
+                        self.preflight_continues = false;
+                        self.begin_merge();
+                    } else {
+                        self.progress_label =
+                            format!("检查完成：{errors} 个错误，{warnings} 个提醒");
+                        self.state = AppState::Ready;
+                        self.merge_rx = None;
+                    }
+                }
                 MergeEvent::Finished {
                     output,
                     rows,
@@ -445,7 +495,7 @@ impl MergeApp {
             changed = true;
             match event {
                 UpdateEvent::Result { version, url } => {
-                    if version.trim_start_matches('v') > env!("CARGO_PKG_VERSION") {
+                    if is_newer_version(&version, env!("CARGO_PKG_VERSION")) {
                         self.update_text = format!("发现 {version}，打开下载页");
                         self.update_url = Some(url);
                     } else {
@@ -634,6 +684,17 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
     let callback_state = state.clone();
     ui.on_remove_source_group(move |path| {
         let path = path.to_string();
+        let app = callback_state.borrow_mut();
+        let count = app
+            .sources
+            .iter()
+            .filter(|table| table.path.display().to_string() == path)
+            .count();
+        drop(app);
+        if count == 0 || !confirm(&format!("确定移除该工作簿及其 {count} 个数据表？"))
+        {
+            return;
+        }
         let mut app = callback_state.borrow_mut();
         app.sources
             .retain(|table| table.path.display().to_string() != path);
@@ -645,8 +706,18 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
     let weak = ui.as_weak();
     let callback_state = state.clone();
     ui.on_remove_source(move |index| {
-        let mut app = callback_state.borrow_mut();
+        let app = callback_state.borrow_mut();
         let index = index.max(0) as usize;
+        let name = app
+            .sources
+            .get(index)
+            .map(SourceTable::display_name)
+            .unwrap_or_default();
+        drop(app);
+        if name.is_empty() || !confirm(&format!("确定移除数据表“{name}”？")) {
+            return;
+        }
+        let mut app = callback_state.borrow_mut();
         if index < app.sources.len() {
             app.sources.remove(index);
         }
@@ -697,6 +768,12 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
     });
     let weak = ui.as_weak();
     let callback_state = state.clone();
+    ui.on_detect_csv_numbers_changed(move |value| {
+        callback_state.borrow_mut().options.detect_csv_numbers = value;
+        sync_weak(&weak, &callback_state);
+    });
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
     ui.on_mapping_table_changed(move |position| {
         let mut app = callback_state.borrow_mut();
         if let Some(index) = app.enabled_indices().get(position.max(0) as usize) {
@@ -738,6 +815,16 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
         sync_weak(&weak, &callback_state);
     });
     sync_callback!(on_reset_mapping, |state: &Rc<RefCell<MergeApp>>| {
+        let name = state
+            .borrow()
+            .sources
+            .get(state.borrow().selected_mapping_table)
+            .map(SourceTable::display_name)
+            .unwrap_or_default();
+        if name.is_empty() || !confirm(&format!("确定恢复“{name}”的所有字段映射？"))
+        {
+            return;
+        }
         let mut app = state.borrow_mut();
         let index = app.selected_mapping_table;
         if let Some(table) = app.sources.get_mut(index) {
@@ -871,6 +958,11 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
         .borrow_mut()
         .start_merge());
     sync_callback!(on_cancel_merge, |state: &Rc<RefCell<MergeApp>>| {
+        if !matches!(state.borrow().state, AppState::Merging)
+            || !confirm("确定取消当前合并？已写入的部分不会保留。")
+        {
+            return;
+        }
         let mut app = state.borrow_mut();
         app.cancel.store(true, Ordering::Relaxed);
         app.progress_label = "正在取消…".to_owned();
@@ -1072,6 +1164,7 @@ fn sync_ui(ui: &AppWindow, app: &MergeApp) {
     ui.set_preview_rows(ModelRc::new(VecModel::from(preview_rows(
         app.preview.as_ref(),
     ))));
+    ui.set_preview_column_widths(preview_column_widths(app.preview.as_ref()));
     ui.set_preview_title(app.preview_title.clone().into());
     let check_rows = app
         .check_issues
@@ -1130,6 +1223,8 @@ fn sync_ui(ui: &AppWindow, app: &MergeApp) {
         JoinKind::Full => 2,
     });
     ui.set_output_path(app.output_path.clone().into());
+    ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+    ui.set_detect_csv_numbers(app.options.detect_csv_numbers);
     ui.set_rows_metric(format_number(rows).into());
     ui.set_columns_metric(plan.headers.len().to_string().into());
     ui.set_sheets_metric(expected_sheets.to_string().into());
@@ -1162,13 +1257,25 @@ fn sync_ui(ui: &AppWindow, app: &MergeApp) {
     ui.set_update_text(app.update_text.clone().into());
 }
 
+/// 预览最多展示 100 列，避免极端宽表把界面拖垮。
+const PREVIEW_MAX_COLUMNS: usize = 100;
+
 fn preview_rows(preview: Option<&PreviewTable>) -> Vec<PreviewRow> {
     let Some(preview) = preview else {
         return Vec::new();
     };
+    let cell_model = |values: &[String]| {
+        ModelRc::new(VecModel::from(
+            values
+                .iter()
+                .take(PREVIEW_MAX_COLUMNS)
+                .map(|value| SharedString::from(value.as_str()))
+                .collect::<Vec<_>>(),
+        ))
+    };
     let mut rows = vec![PreviewRow {
         line_number: "表头".into(),
-        cells: preview.headers.join("  │  ").into(),
+        cells: cell_model(&preview.headers),
         header: true,
     }];
     rows.extend(
@@ -1178,11 +1285,36 @@ fn preview_rows(preview: Option<&PreviewTable>) -> Vec<PreviewRow> {
             .enumerate()
             .map(|(index, row)| PreviewRow {
                 line_number: (index + 1).to_string().into(),
-                cells: row.join("  │  ").into(),
+                cells: cell_model(row),
                 header: false,
             }),
     );
     rows
+}
+
+/// 按表头和抽样内容估算每列宽度（中文按两倍宽度计），钳制在 56–320px。
+fn preview_column_widths(preview: Option<&PreviewTable>) -> ModelRc<f32> {
+    let Some(preview) = preview else {
+        return ModelRc::default();
+    };
+    let mut widths = Vec::with_capacity(preview.headers.len().min(PREVIEW_MAX_COLUMNS));
+    for (column, header) in preview.headers.iter().take(PREVIEW_MAX_COLUMNS).enumerate() {
+        let mut units = display_units(header);
+        for row in preview.rows.iter().take(100) {
+            if let Some(cell) = row.get(column) {
+                units = units.max(display_units(cell));
+            }
+        }
+        widths.push((units as f32 * 7.0 + 20.0).clamp(56.0, 320.0));
+    }
+    ModelRc::new(VecModel::from(widths))
+}
+
+fn display_units(value: &str) -> usize {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+        .sum()
 }
 fn split_columns(value: &str) -> Vec<String> {
     value
@@ -1267,4 +1399,46 @@ fn reveal_in_explorer(path: &Path) {
     }
     #[cfg(not(target_os = "windows"))]
     let _ = path;
+}
+
+fn confirm(question: &str) -> bool {
+    rfd::MessageDialog::new()
+        .set_title("确认操作")
+        .set_description(question)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
+}
+
+/// 解析 "v1.2.3" 形式的版本号；解析失败返回 None。
+fn version_tuple(version: &str) -> Option<(u64, u64, u64)> {
+    let trimmed = version.trim().trim_start_matches('v');
+    let mut parts = trimmed.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
+}
+
+/// 语义化比较远程版本是否比当前版本新（字符串比较会把 0.10 误判为旧版本）。
+fn is_newer_version(remote: &str, current: &str) -> bool {
+    match (version_tuple(remote), version_tuple(current)) {
+        (Some(remote), Some(current)) => remote > current,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_comparison_is_semantic() {
+        assert!(is_newer_version("v0.10.0", "0.3.1"));
+        assert!(!is_newer_version("v0.3.1", "0.3.1"));
+        assert!(!is_newer_version("v0.2.9", "0.3.1"));
+        assert!(is_newer_version("1.0.0", "0.9.9"));
+        assert!(!is_newer_version("junk", "0.3.1"));
+    }
 }

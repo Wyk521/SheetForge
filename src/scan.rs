@@ -106,7 +106,10 @@ pub fn spawn_scan(mut paths: Vec<PathBuf>, tx: Sender<ScanEvent>) {
                 name,
             });
             match result {
-                Ok(mut found) => tables.append(&mut found),
+                Ok((mut found, file_warnings)) => {
+                    tables.append(&mut found);
+                    warnings.extend(file_warnings);
+                }
                 Err(error) => warnings.push(format!("{}：{error:#}", path.display())),
             }
         }
@@ -125,17 +128,58 @@ pub fn spawn_scan(mut paths: Vec<PathBuf>, tx: Sender<ScanEvent>) {
     });
 }
 
-pub fn scan_file(path: &Path) -> Result<Vec<SourceTable>> {
+/// 扫描单个文件，返回数据表和该文件的警告（如可疑编码）。
+pub fn scan_file(path: &Path) -> Result<(Vec<SourceTable>, Vec<String>)> {
     match path
         .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_ascii_lowercase())
         .as_deref()
     {
-        Some("csv" | "tsv") => scan_csv_auto(path).map(|table| vec![table]),
-        Some("xlsx" | "xlsm" | "xls" | "xlsb" | "ods") => scan_workbook_auto_headers(path),
-        _ => Ok(Vec::new()),
+        Some("csv" | "tsv") => {
+            let table = scan_csv_auto(path)?;
+            let delimiter = match table.kind {
+                SourceKind::Csv { delimiter } => delimiter,
+                SourceKind::Workbook => return Ok((vec![table], Vec::new())),
+            };
+            let mut warnings = Vec::new();
+            if csv_encoding_suspicious(path, delimiter) {
+                warnings.push(format!(
+                    "{}：文件编码可能不是 UTF-8 或 GBK，部分字符无法识别",
+                    path.display()
+                ));
+            }
+            Ok((vec![table], warnings))
+        }
+        Some("xlsx" | "xlsm" | "xls" | "xlsb" | "ods") => {
+            Ok((scan_workbook_auto_headers(path)?, Vec::new()))
+        }
+        _ => Ok((Vec::new(), Vec::new())),
     }
+}
+
+/// 抽样检查 CSV 前若干条记录的解码质量，出现替换字符（U+FFFD）视为可疑编码。
+fn csv_encoding_suspicious(path: &Path, delimiter: u8) -> bool {
+    let Ok(mut reader) = ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .delimiter(delimiter)
+        .from_path(path)
+    else {
+        return false;
+    };
+    let mut record = ByteRecord::new();
+    let mut checked = 0;
+    while checked < 50 && reader.read_byte_record(&mut record).unwrap_or(false) {
+        if record
+            .iter()
+            .any(|field| decode_csv_field_with_quality(field).1)
+        {
+            return true;
+        }
+        checked += 1;
+    }
+    false
 }
 
 pub fn spawn_table_reload(
@@ -525,12 +569,18 @@ pub fn detect_delimiter(path: &Path) -> Result<u8> {
 }
 
 pub fn decode_csv_field(bytes: &[u8]) -> String {
+    decode_csv_field_with_quality(bytes).0
+}
+
+/// 解码 CSV 字段，同时返回解码质量：为 true 表示出现了替换字符（U+FFFD），
+/// 通常是文件既非 UTF-8 也非 GBK 编码的信号。
+pub fn decode_csv_field_with_quality(bytes: &[u8]) -> (String, bool) {
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     if let Ok(value) = std::str::from_utf8(bytes) {
-        return value.to_owned();
+        return (value.to_owned(), false);
     }
-    let (value, _, _) = GBK.decode(bytes);
-    value.into_owned()
+    let (value, _, had_errors) = GBK.decode(bytes);
+    (value.into_owned(), had_errors)
 }
 
 pub fn for_each_csv_row<F>(
@@ -593,8 +643,9 @@ mod tests {
         writeln!(file, "张三;\"北京,朝阳\";12").unwrap();
         writeln!(file, "李四;\"上海,浦东\";15").unwrap();
         assert_eq!(detect_delimiter(&path).unwrap(), b';');
-        let tables = scan_file(&path).unwrap();
+        let (tables, warnings) = scan_file(&path).unwrap();
         assert_eq!(tables[0].headers, vec!["姓名", "说明", "金额"]);
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -603,7 +654,8 @@ mod tests {
         let path = directory.path().join("quoted.csv");
         std::fs::write(&path, "id,note\n1,\"line one\nline two\"\n").unwrap();
         assert_eq!(detect_delimiter(&path).unwrap(), b',');
-        let table = scan_file(&path).unwrap().remove(0);
+        let (tables, _) = scan_file(&path).unwrap();
+        let table = tables.into_iter().next().unwrap();
         let mut values = Vec::new();
         if let SourceKind::Csv { delimiter } = table.kind {
             for_each_csv_row(
@@ -620,5 +672,20 @@ mod tests {
         }
         assert_eq!(values.len(), 1);
         assert_eq!(values[0][1], "line one\nline two");
+    }
+
+    #[test]
+    fn non_utf8_non_gbk_csv_gets_encoding_warning() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("latin1.csv");
+        // "café" 的 é 以 Latin-1 字节 0xE9 写入，既非 UTF-8 也无法按 GBK 完整解码。
+        std::fs::write(&path, b"name,value\ncaf\xE9\n").unwrap();
+        let (_, warnings) = scan_file(&path).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("编码可能不是 UTF-8 或 GBK")),
+            "warnings: {warnings:?}"
+        );
     }
 }

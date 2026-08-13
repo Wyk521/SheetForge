@@ -29,9 +29,6 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Generate dependency lockfile
-        run: cargo generate-lockfile
-
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
@@ -49,12 +46,12 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
       - name: Security audit
         shell: pwsh
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit
-
+        run: cargo audit
       - name: Build release
         run: cargo build --release --locked
 
@@ -95,7 +92,7 @@ jobs:
       - name: Upload Windows package
         uses: actions/upload-artifact@v7
         with:
-          name: SheetMerge-Windows-x64
+          name: SheetForge-Windows-x64
           path: |
             dist/SheetForge.exe
             dist/SHA256SUMS.txt
