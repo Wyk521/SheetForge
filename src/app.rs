@@ -224,10 +224,7 @@ impl MergeApp {
         }
         let issues = preflight(&self.sources, &self.options);
         if let Some(issue) = issues.iter().find(|issue| issue.level == IssueLevel::Error) {
-            let message = format!(
-                "合并前检查未通过：{} — {}",
-                issue.title, issue.detail
-            );
+            let message = format!("合并前检查未通过：{} — {}", issue.title, issue.detail);
             self.check_issues = issues;
             self.state = AppState::Error(message);
             return;
@@ -645,7 +642,9 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
     let weak = ui.as_weak();
     let callback_state = state.clone();
     ui.on_apply_source_group_header(move |path| {
-        callback_state.borrow_mut().start_group_reload(path.as_str());
+        callback_state
+            .borrow_mut()
+            .start_group_reload(path.as_str());
         sync_weak(&weak, &callback_state);
     });
     let weak = ui.as_weak();

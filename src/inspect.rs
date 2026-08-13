@@ -213,14 +213,20 @@ pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIss
                 for (column, header) in preview.headers.iter().enumerate() {
                     let key = header_key(header);
                     for row in &preview.rows {
-                        let value = row.get(column).map(|value| value.trim()).unwrap_or_default();
+                        let value = row
+                            .get(column)
+                            .map(|value| value.trim())
+                            .unwrap_or_default();
                         if value.is_empty() {
                             continue;
                         }
                         *non_empty_counts.entry(key.clone()).or_default() += 1;
                         let kind = if value.parse::<f64>().is_ok() {
                             "数字"
-                        } else if matches!(value.to_lowercase().as_str(), "true" | "false" | "是" | "否") {
+                        } else if matches!(
+                            value.to_lowercase().as_str(),
+                            "true" | "false" | "是" | "否"
+                        ) {
                             "布尔"
                         } else {
                             "文本"
