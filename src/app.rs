@@ -340,7 +340,20 @@ fn sync_ui(ui: &AppWindow, app: &MergeApp) {
     ui.set_output_columns(ModelRc::new(VecModel::from(plan.headers.iter().enumerate().map(|(index, name)| ColumnRow { column_index: index as i32, name: name.clone().into() }).collect::<Vec<_>>()));
     ui.set_preview_rows(ModelRc::new(VecModel::from(preview_rows(app.preview.as_ref()))));
     ui.set_preview_title(app.preview_title.clone().into());
-    ui.set_check_rows(ModelRc::new(VecModel::from(app.check_issues.iter().map(|issue| CheckRow { level: match issue.level { IssueLevel::Info => 0, IssueLevel::Warning => 1, IssueLevel::Error => 2 }, title: issue.title.clone().into(), detail: issue.detail.clone().into() }).collect::<Vec<_>>()));
+    let check_rows = app
+        .check_issues
+        .iter()
+        .map(|issue| CheckRow {
+            level: match issue.level {
+                IssueLevel::Info => 0,
+                IssueLevel::Warning => 1,
+                IssueLevel::Error => 2,
+            },
+            title: issue.title.clone().into(),
+            detail: issue.detail.clone().into(),
+        })
+        .collect::<Vec<_>>();
+    ui.set_check_rows(ModelRc::new(VecModel::from(check_rows)));
     let errors = app.check_issues.iter().filter(|issue| issue.level == IssueLevel::Error).count(); let warnings = app.check_issues.iter().filter(|issue| issue.level == IssueLevel::Warning).count();
     ui.set_check_summary(if app.check_issues.is_empty() { "尚未检查".into() } else { format!("检查完成：{errors} 个错误，{warnings} 个提醒").into() });
 

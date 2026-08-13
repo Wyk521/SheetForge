@@ -18,6 +18,9 @@ jobs:
       - name: Use stable Rust
         run: rustup default stable
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
       - name: Generate dependency lockfile
         run: cargo generate-lockfile
 
