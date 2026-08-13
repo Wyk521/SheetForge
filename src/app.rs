@@ -182,7 +182,7 @@ impl MergeApp {
         self.state = AppState::Scanning;
         self.progress = 0.15;
         self.progress_label = format!(
-            "正在按第 {header_row} 行、{header_rows} 层重新读取：{}",
+            "正在从第 {header_row} 行开始、读取 {header_rows} 行表头：{}",
             source.display_name()
         );
         spawn_table_reload(index, source, header_row, header_rows, tx);
@@ -204,8 +204,9 @@ impl MergeApp {
         self.scan_rx = Some(rx);
         self.state = AppState::Scanning;
         self.progress = 0.15;
-        self.progress_label =
-            format!("正在把第 {header_row} 行、{header_rows} 层表头应用到整本工作簿…");
+        self.progress_label = format!(
+            "正在把从第 {header_row} 行开始、占用 {header_rows} 行的表头设置应用到整本工作簿…"
+        );
         spawn_group_reload(sources, header_row, header_rows, tx);
     }
     fn start_merge(&mut self) {
@@ -468,16 +469,6 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let state = Rc::new(RefCell::new(MergeApp::default()));
     {
         let app = state.borrow();
-        ui.window().set_size(slint::PhysicalSize::new(
-            app.settings.window_width.max(1000.0) as u32,
-            app.settings.window_height.max(700.0) as u32,
-        ));
-        if app.settings.window_x != i32::MIN && app.settings.window_y != i32::MIN {
-            ui.window().set_position(slint::PhysicalPosition::new(
-                app.settings.window_x,
-                app.settings.window_y,
-            ));
-        }
         ui.window().set_maximized(app.settings.window_maximized);
     }
     sync_ui(&ui, &state.borrow());
@@ -496,14 +487,6 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let result = ui.run();
     let mut app = state.borrow_mut();
     let maximized = ui.window().is_maximized();
-    if !maximized {
-        let size = ui.window().size();
-        app.settings.window_width = size.width as f32;
-        app.settings.window_height = size.height as f32;
-    }
-    let position = ui.window().position();
-    app.settings.window_x = position.x;
-    app.settings.window_y = position.y;
     app.settings.window_maximized = maximized;
     let _ = save_settings(&app.settings);
     result

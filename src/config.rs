@@ -18,11 +18,6 @@ pub struct AppSettings {
     pub output_directory: String,
     pub recent_folders: Vec<String>,
     pub recent_schemes: Vec<String>,
-    pub source_panel_ratio: f32,
-    pub window_width: f32,
-    pub window_height: f32,
-    pub window_x: i32,
-    pub window_y: i32,
     pub window_maximized: bool,
     pub check_updates: bool,
 }
@@ -33,11 +28,6 @@ impl Default for AppSettings {
             output_directory: String::new(),
             recent_folders: Vec::new(),
             recent_schemes: Vec::new(),
-            source_panel_ratio: 0.36,
-            window_width: 1360.0,
-            window_height: 860.0,
-            window_x: i32::MIN,
-            window_y: i32::MIN,
             window_maximized: false,
             check_updates: true,
         }

@@ -15,6 +15,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -56,6 +58,12 @@ jobs:
       - name: Build release
         run: cargo build --release --locked
 
+      - name: Prepare portable executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\SheetForge.exe dist\SheetForge.exe
+
       - name: Sign executable when certificate is configured
         shell: pwsh
         env:
@@ -68,16 +76,13 @@ jobs:
           }
           $certificate = Join-Path $env:RUNNER_TEMP "codesign.pfx"
           [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
-          & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $certificate /p $env:WINDOWS_CERTIFICATE_PASSWORD target\release\SheetForge.exe
+          & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $certificate /p $env:WINDOWS_CERTIFICATE_PASSWORD dist\SheetForge.exe
           if ($LASTEXITCODE -ne 0) { throw "代码签名失败" }
 
-      - name: Build installer
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
-          if ($LASTEXITCODE -ne 0) { throw "安装包构建失败" }
-          Copy-Item target\release\SheetForge.exe dist\SheetForge.exe
+      - name: Attest portable executable
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/SheetForge.exe
 
       - name: Generate SHA256 checksums
         shell: pwsh
@@ -93,7 +98,6 @@ jobs:
           name: SheetMerge-Windows-x64
           path: |
             dist/SheetForge.exe
-            dist/SheetMerge-Setup.exe
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -115,7 +119,7 @@ jobs:
             if ($manifest -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw "无法读取版本号" }
             $tag = "v$($Matches[1])"
           }
-          $assets = @("dist\SheetForge.exe", "dist\SheetMerge-Setup.exe", "dist\SHA256SUMS.txt")
+          $assets = @("dist\SheetForge.exe", "dist\SHA256SUMS.txt")
           gh release view $tag --repo "${{ github.repository }}" *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag $assets --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "表格合并 $tag" --generate-notes
