@@ -1,11 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MergeMode {
     Union,
     Intersection,
     Manual,
+    Consolidate,
+    Join,
 }
 
 impl MergeMode {
@@ -14,34 +18,82 @@ impl MergeMode {
             Self::Union => "列名并集",
             Self::Intersection => "列名交集",
             Self::Manual => "手动映射",
+            Self::Consolidate => "按键汇总",
+            Self::Join => "横向关联",
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum SourceKind {
     Csv { delimiter: u8 },
     Workbook,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransformOp {
+    None,
+    Trim,
+    Uppercase,
+    Lowercase,
+}
+
+impl TransformOp {
+    pub fn apply(self, value: &str) -> String {
+        match self {
+            Self::None => value.to_owned(),
+            Self::Trim => value.trim().to_owned(),
+            Self::Uppercase => value.trim().to_uppercase(),
+            Self::Lowercase => value.trim().to_lowercase(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AggregateOp {
+    First,
+    Sum,
+    UniqueJoin,
+    TextJoin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JoinKind {
+    Left,
+    Inner,
+    Full,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ColumnMapping {
     pub source_index: usize,
     pub source_name: String,
     pub target_name: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub transform: TransformOp,
+    #[serde(default)]
+    pub aggregate: AggregateOp,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceTable {
     pub path: PathBuf,
     pub sheet_name: String,
     pub kind: SourceKind,
     pub header_row: usize,
+    #[serde(default = "default_header_rows")]
+    pub header_rows: usize,
+    #[serde(default)]
+    pub suggested_header_row: usize,
     pub headers: Vec<String>,
     pub estimated_rows: u64,
     pub enabled: bool,
     pub mappings: Vec<ColumnMapping>,
+}
+
+fn default_header_rows() -> usize {
+    1
 }
 
 impl SourceTable {
@@ -55,11 +107,67 @@ impl SourceTable {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MergeOptions {
     pub mode: MergeMode,
     pub include_source_file: bool,
     pub include_source_sheet: bool,
+    #[serde(default)]
+    pub output_order: Vec<String>,
+    #[serde(default)]
+    pub deduplicate: bool,
+    #[serde(default)]
+    pub key_columns: Vec<String>,
+    #[serde(default)]
+    pub join_kind: JoinKind,
+    #[serde(default = "default_join_separator")]
+    pub text_join_separator: String,
+    #[serde(default)]
+    pub filter_column: String,
+    #[serde(default)]
+    pub filter_text: String,
+    #[serde(default)]
+    pub filter_exclude: bool,
+}
+
+fn default_join_separator() -> String {
+    "；".to_owned()
+}
+
+impl Default for MergeOptions {
+    fn default() -> Self {
+        Self {
+            mode: MergeMode::Union,
+            include_source_file: false,
+            include_source_sheet: false,
+            output_order: Vec::new(),
+            deduplicate: false,
+            key_columns: Vec::new(),
+            join_kind: JoinKind::Left,
+            text_join_separator: default_join_separator(),
+            filter_column: String::new(),
+            filter_text: String::new(),
+            filter_exclude: false,
+        }
+    }
+}
+
+impl Default for TransformOp {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl Default for AggregateOp {
+    fn default() -> Self {
+        Self::First
+    }
+}
+
+impl Default for JoinKind {
+    fn default() -> Self {
+        Self::Left
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +216,8 @@ pub fn make_default_mappings(headers: &[String]) -> Vec<ColumnMapping> {
             source_name: name.clone(),
             target_name: name.clone(),
             enabled: true,
+            transform: TransformOp::None,
+            aggregate: AggregateOp::First,
         })
         .collect()
 }
@@ -115,10 +225,20 @@ pub fn make_default_mappings(headers: &[String]) -> Vec<ColumnMapping> {
 pub fn build_output_plan(tables: &[SourceTable], options: &MergeOptions) -> OutputPlan {
     let enabled: Vec<&SourceTable> = tables.iter().filter(|table| table.enabled).collect();
     let mut headers = match options.mode {
-        MergeMode::Union => union_headers(&enabled),
+        MergeMode::Union | MergeMode::Consolidate | MergeMode::Join => union_headers(&enabled),
         MergeMode::Intersection => intersection_headers(&enabled),
         MergeMode::Manual => manual_headers(&enabled),
     };
+
+    if !options.output_order.is_empty() {
+        let positions: HashMap<String, usize> = options
+            .output_order
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (header_key(name), index))
+            .collect();
+        headers.sort_by_key(|name| positions.get(&header_key(name)).copied().unwrap_or(usize::MAX));
+    }
 
     let source_file_column = options
         .include_source_file
@@ -221,7 +341,7 @@ pub fn source_to_output_map(
         .collect();
 
     match mode {
-        MergeMode::Union | MergeMode::Intersection => table
+        MergeMode::Union | MergeMode::Intersection | MergeMode::Consolidate | MergeMode::Join => table
             .headers
             .iter()
             .enumerate()
@@ -257,6 +377,8 @@ mod tests {
             sheet_name: "CSV".to_owned(),
             kind: SourceKind::Csv { delimiter: b',' },
             header_row: 1,
+            header_rows: 1,
+            suggested_header_row: 1,
             mappings: make_default_mappings(&headers),
             headers,
             estimated_rows: 0,
@@ -277,19 +399,11 @@ mod tests {
         let tables = vec![table(&["姓名", "年龄"]), table(&["姓名", "城市"])];
         let union = build_output_plan(
             &tables,
-            &MergeOptions {
-                mode: MergeMode::Union,
-                include_source_file: false,
-                include_source_sheet: false,
-            },
+            &MergeOptions { mode: MergeMode::Union, ..Default::default() },
         );
         let intersection = build_output_plan(
             &tables,
-            &MergeOptions {
-                mode: MergeMode::Intersection,
-                include_source_file: false,
-                include_source_sheet: false,
-            },
+            &MergeOptions { mode: MergeMode::Intersection, ..Default::default() },
         );
         assert_eq!(union.headers, vec!["姓名", "年龄", "城市"]);
         assert_eq!(intersection.headers, vec!["姓名"]);
@@ -300,11 +414,7 @@ mod tests {
         let tables = vec![table(&["姓名", "手机号"]), table(&["姓名", "联系电话"])];
         let manual = build_output_plan(
             &tables,
-            &MergeOptions {
-                mode: MergeMode::Manual,
-                include_source_file: false,
-                include_source_sheet: false,
-            },
+            &MergeOptions { mode: MergeMode::Manual, ..Default::default() },
         );
         assert_eq!(manual.headers, vec!["姓名", "手机号", "联系电话"]);
         assert_eq!(common_header_keys(&tables), HashSet::from(["姓名".to_owned()]));
@@ -318,11 +428,7 @@ mod tests {
         b.mappings[0].target_name = "电话".to_owned();
         let plan = build_output_plan(
             &[a, b],
-            &MergeOptions {
-                mode: MergeMode::Manual,
-                include_source_file: false,
-                include_source_sheet: false,
-            },
+            &MergeOptions { mode: MergeMode::Manual, ..Default::default() },
         );
         assert_eq!(plan.headers, vec!["电话"]);
     }

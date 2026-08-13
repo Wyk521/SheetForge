@@ -1,13 +1,17 @@
-import {
-    AboutSlint, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, SpinBox
-} from "std-widgets.slint";
+import { AboutSlint, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, SpinBox } from "std-widgets.slint";
 
 export struct SourceRow {
+    is-group: bool,
+    source-index: int,
     enabled: bool,
+    collapsed: bool,
     file-name: string,
     sheet-name: string,
     detail: string,
+    path: string,
     header-row: int,
+    header-rows: int,
+    suggested-row: int,
 }
 
 export struct MappingRow {
@@ -15,589 +19,221 @@ export struct MappingRow {
     mapping-index: int,
     source-name: string,
     target-name: string,
+    suggestion: string,
+    transform-index: int,
+    aggregate-index: int,
 }
 
+export struct PreviewRow { line-number: string, cells: string, header: bool }
+export struct CheckRow { level: int, title: string, detail: string }
+export struct ColumnRow { column-index: int, name: string }
+
 component Surface inherits Rectangle {
-    background: #ffffff;
-    border-color: #e2e8f0;
-    border-width: 1px;
-    border-radius: 14px;
-    clip: true;
+    background: #ffffff; border-color: #dbe3ee; border-width: 1px; border-radius: 14px; clip: true;
 }
 
 component ActionButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> primary: false;
-    in property <bool> enabled: true;
-    callback clicked();
+    in property <string> text; in property <bool> primary: false; in property <bool> enabled: true; callback clicked();
+    height: 38px; border-radius: 9px;
+    background: !root.enabled ? #e2e8f0 : touch.has-hover ? (root.primary ? #1d4ed8 : #eff6ff) : (root.primary ? #2563eb : #ffffff);
+    border-width: root.primary ? 0px : 1px; border-color: touch.has-hover ? #60a5fa : #cbd5e1;
+    Text { text: root.text; color: !root.enabled ? #94a3b8 : (root.primary ? #ffffff : #1e293b); font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+    touch := TouchArea { mouse-cursor: root.enabled ? pointer : default; clicked => { if (root.enabled) { root.clicked(); } } }
+}
 
-    height: 40px;
-    border-radius: 9px;
-    background: !root.enabled ? #e2e8f0
-        : touch.has-hover ? (root.primary ? #1d4ed8 : #eff6ff)
-        : (root.primary ? #2563eb : #ffffff);
-    border-width: root.primary ? 0px : 1px;
-    border-color: touch.has-hover ? #60a5fa : #cbd5e1;
-
-    Text {
-        text: root.text;
-        color: !root.enabled ? #94a3b8 : (root.primary ? #ffffff : #1e293b);
-        font-size: 13px;
-        font-weight: 600;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
-    touch := TouchArea {
-        mouse-cursor: root.enabled ? pointer : default;
-        clicked => { if (root.enabled) { root.clicked(); } }
-    }
+component NavButton inherits Rectangle {
+    in property <string> number; in property <string> text; in property <bool> selected; callback clicked();
+    width: 132px; height: 38px; border-radius: 19px;
+    background: root.selected ? #ffffff22 : transparent; border-width: 1px; border-color: root.selected ? #93c5fd : #ffffff40;
+    Text { text: root.number + "  " + root.text; color: #ffffff; font-size: 12px; font-weight: root.selected ? 700 : 550; horizontal-alignment: center; vertical-alignment: center; }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 component ModeButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> selected;
-    callback clicked();
-
-    height: 38px;
-    border-radius: 9px;
-    background: root.selected ? #dbeafe : (touch.has-hover ? #f8fafc : #ffffff);
-    border-width: root.selected ? 2px : 1px;
-    border-color: root.selected ? #2563eb : #e2e8f0;
-    Text {
-        text: root.text;
-        color: root.selected ? #1d4ed8 : #475569;
-        font-size: 13px;
-        font-weight: root.selected ? 700 : 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
-}
-
-component StepChip inherits Rectangle {
-    in property <string> number;
-    in property <string> text;
-    in property <bool> active;
-
-    width: 112px;
-    height: 34px;
-    border-radius: 17px;
-    background: root.active ? #3b82f6 : #1e3a5f;
-    border-width: 1px;
-    border-color: root.active ? #93c5fd : #476887;
-    Text {
-        text: root.number + "  " + root.text;
-        color: #ffffff;
-        font-size: 12px;
-        font-weight: 650;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
-component Metric inherits Rectangle {
-    in property <string> label;
-    in property <string> value;
-    width: 112px;
-    height: 54px;
-    border-radius: 10px;
-    background: #f8fafc;
-    VerticalLayout {
-        padding: 8px;
-        spacing: 2px;
-        Text { text: root.label; color: #64748b; font-size: 11px; }
-        Text { text: root.value; color: #0f172a; font-size: 17px; font-weight: 700; }
-    }
+    in property <string> text; in property <bool> selected; callback clicked();
+    height: 38px; border-radius: 9px; background: root.selected ? #dbeafe : (touch.has-hover ? #f8fafc : #ffffff);
+    border-width: root.selected ? 2px : 1px; border-color: root.selected ? #2563eb : #e2e8f0;
+    Text { text: root.text; color: root.selected ? #1d4ed8 : #475569; font-size: 12px; font-weight: root.selected ? 700 : 500; horizontal-alignment: center; vertical-alignment: center; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 component OptionToggle inherits Rectangle {
-    in property <string> title;
-    in property <string> description;
-    in property <bool> checked;
-    callback toggled(bool);
-
-    height: 52px;
-    border-radius: 9px;
-    border-width: 1px;
-    border-color: root.checked ? #93c5fd : #e2e8f0;
-    background: root.checked ? #eff6ff : (touch.has-hover ? #f8fafc : #ffffff);
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        padding-top: 8px;
-        padding-bottom: 8px;
-        spacing: 10px;
-        Rectangle {
-            min-width: 20px;
-            max-width: 20px;
-            min-height: 20px;
-            max-height: 20px;
-            border-radius: 5px;
-            border-width: 1px;
-            border-color: root.checked ? #2563eb : #94a3b8;
-            background: root.checked ? #2563eb : #ffffff;
-            Text {
-                text: root.checked ? "✓" : "";
-                color: #ffffff;
-                font-size: 14px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+    in property <string> title; in property <string> description; in property <bool> checked; callback toggled(bool);
+    height: 52px; border-radius: 9px; border-width: 1px; border-color: root.checked ? #93c5fd : #e2e8f0; background: root.checked ? #eff6ff : #ffffff;
+    HorizontalLayout { padding: 9px; spacing: 9px;
+        Rectangle { width: 20px; height: 20px; border-radius: 5px; border-width: 1px; border-color: root.checked ? #2563eb : #94a3b8; background: root.checked ? #2563eb : #ffffff;
+            Text { text: root.checked ? "✓" : ""; color: #ffffff; font-size: 14px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
         }
-        VerticalLayout {
-            spacing: 1px;
-            Text { text: root.title; color: #1e293b; font-size: 12px; font-weight: 650; }
-            Text { text: root.description; color: #64748b; font-size: 10px; overflow: elide; }
-        }
+        VerticalLayout { spacing: 1px; Text { text: root.title; color: #1e293b; font-size: 12px; font-weight: 650; } Text { text: root.description; color: #64748b; font-size: 10px; overflow: elide; } }
     }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.toggled(!root.checked); }
-    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.toggled(!root.checked); } }
+}
+
+component Metric inherits Rectangle {
+    in property <string> label; in property <string> value; width: 110px; height: 50px; border-radius: 10px; background: #f8fafc;
+    VerticalLayout { padding: 7px; spacing: 1px; Text { text: root.label; color: #64748b; font-size: 10px; } Text { text: root.value; color: #0f172a; font-size: 16px; font-weight: 700; } }
 }
 
 export component AppWindow inherits Window {
-    title: "表格合并";
-    icon: @image-url("../assets/app-icon.svg");
-    preferred-width: 1180px;
-    preferred-height: 820px;
-    min-width: 960px;
-    min-height: 680px;
-    background: #f1f5f9;
-    default-font-family: "Microsoft YaHei UI";
-    init => { Palette.color-scheme = ColorScheme.light; }
+    title: "表格合并"; icon: @image-url("../assets/app-icon.svg");
+    preferred-width: 1320px; preferred-height: 850px; min-width: 1000px; min-height: 700px;
+    background: #f1f5f9; default-font-family: "Microsoft YaHei UI"; init => { Palette.color-scheme = ColorScheme.light; }
 
-    in property <[SourceRow]> sources;
-    in property <[string]> mapping-tables;
-    in property <[MappingRow]> mappings;
-    in-out property <string> output-path;
-    in-out property <int> mode-index: 0;
-    in-out property <int> mapping-table-index: 0;
-    in-out property <bool> include-source-file: false;
-    in-out property <bool> include-source-sheet: false;
-    in property <string> input-label;
-    in property <string> sources-summary;
-    in property <string> common-fields-label;
-    in property <string> rows-metric: "0";
-    in property <string> columns-metric: "0";
-    in property <string> sheets-metric: "1";
-    in property <string> status-text;
-    in property <int> status-kind: 0;
-    in property <float> progress: 0;
-    in property <bool> busy: false;
-    in property <bool> has-sources: false;
-    in property <bool> can-start: false;
-    in property <bool> can-reveal: false;
-    in property <bool> show-progress: false;
+    in property <[SourceRow]> sources; in property <[string]> mapping-tables; in property <[MappingRow]> mappings;
+    in property <[PreviewRow]> preview-rows; in property <[CheckRow]> check-rows; in property <[ColumnRow]> output-columns;
+    in-out property <string> output-path; in-out property <int> mode-index: 0; in-out property <int> mapping-table-index: 0;
+    in-out property <int> preview-table-index: 0; in-out property <int> active-page: 0; in-out property <int> preview-mode: 0;
+    in-out property <bool> include-source-file: false; in-out property <bool> include-source-sheet: false;
+    in-out property <bool> deduplicate: false; in-out property <bool> filter-exclude: false; in-out property <int> join-kind-index: 0;
+    in-out property <string> source-search; in-out property <string> mapping-search; in-out property <bool> mismatch-only: false;
+    in-out property <string> key-columns; in-out property <string> filter-column; in-out property <string> filter-text;
+    in property <string> input-label; in property <string> sources-summary; in property <string> common-fields-label;
+    in property <string> rows-metric: "0"; in property <string> columns-metric: "0"; in property <string> sheets-metric: "1";
+    in property <string> status-text; in property <int> status-kind: 0; in property <float> progress: 0;
+    in property <bool> busy: false; in property <bool> has-sources: false; in property <bool> can-start: false; in property <bool> can-reveal: false; in property <bool> show-progress: false;
+    in property <string> preview-title: "尚未生成预览"; in property <string> check-summary: "尚未检查"; in property <string> update-text: "检查更新";
     in-out property <bool> show-about: false;
 
-    callback choose-folder();
-    callback choose-files();
-    callback source-enabled-changed(int, bool);
-    callback select-all-sources(bool);
-    callback header-row-changed(int, int);
-    callback mode-changed(int);
-    callback include-source-file-changed(bool);
-    callback include-source-sheet-changed(bool);
-    callback mapping-table-changed(int);
-    callback mapping-changed(int, bool, string);
-    callback reset-mapping();
-    callback toggle-common-fields();
-    callback output-path-changed(string);
-    callback choose-output();
-    callback start-merge();
-    callback cancel-merge();
-    callback reveal-output();
+    callback choose-folder(); callback choose-files(); callback source-enabled-changed(int, bool); callback select-all-sources(bool);
+    callback toggle-source-group(string); callback remove-source(int); callback header-changed(int, int, int); callback source-search-changed(string);
+    callback mode-changed(int); callback include-source-file-changed(bool); callback include-source-sheet-changed(bool);
+    callback mapping-table-changed(int); callback mapping-changed(int, bool, string); callback mapping-operation-changed(int, int, int);
+    callback reset-mapping(); callback toggle-common-fields(); callback mapping-search-changed(string); callback mismatch-only-changed(bool); callback apply-suggestions();
+    callback advanced-options-changed(string, bool, string, string, bool, int); callback move-output-column(int, int);
+    callback save-scheme(); callback load-scheme(); callback preview-source(int); callback preview-merged(); callback run-check(); callback export-check();
+    callback output-path-changed(string); callback choose-output(); callback start-merge(); callback cancel-merge(); callback reveal-output();
+    callback check-update(); callback open-log(); callback can-drop(data-transfer) -> bool; callback files-dropped(data-transfer);
 
-    VerticalLayout {
-        spacing: 0px;
-
-        Rectangle {
-            height: 92px;
-            background: @linear-gradient(90deg, #0f2f5f 0%, #1e40af 58%, #2563eb 100%);
-            HorizontalLayout {
-                padding-left: 24px;
-                padding-right: 20px;
-                padding-top: 15px;
-                padding-bottom: 15px;
-                spacing: 12px;
-                Image {
-                    min-width: 42px;
-                    max-width: 42px;
-                    min-height: 42px;
-                    max-height: 42px;
-                    source: @image-url("../assets/app-icon.svg");
-                    image-fit: contain;
-                    accessible-role: none;
+    VerticalLayout { spacing: 0px;
+        Rectangle { height: 82px; background: @linear-gradient(90deg, #102f5c 0%, #1e40af 58%, #2563eb 100%);
+            HorizontalLayout { padding-left: 22px; padding-right: 18px; padding-top: 13px; padding-bottom: 13px; spacing: 11px;
+                Image { width: 42px; height: 42px; source: @image-url("../assets/app-icon.svg"); image-fit: contain; }
+                VerticalLayout { horizontal-stretch: 1; spacing: 1px;
+                    Text { text: "表格合并"; color: #ffffff; font-size: 23px; font-weight: 750; }
+                    Text { text: "Excel / CSV 批量整理与合并"; color: #bfdbfe; font-size: 12px; }
                 }
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 2px;
-                    Text {
-                        text: "表格合并";
-                        color: #ffffff;
-                        font-size: 25px;
-                        font-weight: 750;
-                    }
-                    Text {
-                        text: "Excel / CSV 批量合并  ·  数据仅在本机处理";
-                        color: #bfdbfe;
-                        font-size: 13px;
-                    }
-                }
-                StepChip { number: "01"; text: "选择数据"; active: root.has-sources; }
-                StepChip { number: "02"; text: "设置规则"; active: root.has-sources; }
-                StepChip { number: "03"; text: "导出 XLSX"; active: root.can-reveal; }
-                ActionButton {
-                    width: 58px;
-                    height: 34px;
-                    text: "关于";
-                    clicked => { root.show-about = true; }
-                }
+                NavButton { number: "01"; text: "数据源"; selected: root.active-page == 0; clicked => { root.active-page = 0; } }
+                NavButton { number: "02"; text: "合并规则"; selected: root.active-page == 1; clicked => { root.active-page = 1; } }
+                NavButton { number: "03"; text: "预览与检查"; selected: root.active-page == 2; clicked => { root.active-page = 2; } }
+                ActionButton { width: 72px; height: 34px; text: "保存方案"; enabled: root.has-sources && !root.busy; clicked => { root.save-scheme(); } }
+                ActionButton { width: 72px; height: 34px; text: "打开方案"; enabled: !root.busy; clicked => { root.load-scheme(); } }
+                ActionButton { width: 52px; height: 34px; text: "关于"; clicked => { root.show-about = true; } }
             }
         }
 
-        Rectangle {
-            vertical-stretch: 1;
-            background: #f1f5f9;
-            HorizontalLayout {
-                padding: 18px;
-                spacing: 14px;
-
-                Surface {
-                    width: 36%;
-                    VerticalLayout {
-                        padding: 18px;
-                        spacing: 10px;
-                        Text { text: "1  选择数据源"; color: #0f172a; font-size: 18px; font-weight: 700; }
-                        Text {
-                            text: "每张表可单独选择表头行，修改后会自动刷新字段";
-                            color: #64748b;
-                            font-size: 12px;
+        Rectangle { vertical-stretch: 1; background: #f1f5f9;
+            DropArea {
+                enabled: !root.busy;
+                can-drop(event) => { return root.can-drop(event.data) ? DragAction.copy : DragAction.none; }
+                dropped(event) => { root.files-dropped(event.data); return DragAction.copy; }
+            }
+            if root.active-page == 0: Surface { x: 16px; y: 14px; width: parent.width - 32px; height: parent.height - 28px;
+                VerticalLayout { padding: 16px; spacing: 9px;
+                    HorizontalLayout { spacing: 9px;
+                        VerticalLayout { horizontal-stretch: 1; spacing: 1px;
+                            Text { text: "选择数据源"; color: #0f172a; font-size: 19px; font-weight: 700; }
+                            Text { text: "按工作簿分组；支持递归文件夹、多 Sheet、拖放和 1–3 行表头"; color: #64748b; font-size: 11px; }
                         }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            ActionButton {
-                                width: 116px;
-                                text: "选择文件夹";
-                                primary: true;
-                                enabled: !root.busy;
-                                clicked => { root.choose-folder(); }
-                            }
-                            ActionButton {
-                                width: 126px;
-                                text: "选择多个文件";
-                                enabled: !root.busy;
-                                clicked => { root.choose-files(); }
-                            }
+                        ActionButton { width: 112px; text: "选择文件夹"; primary: true; enabled: !root.busy; clicked => { root.choose-folder(); } }
+                        ActionButton { width: 122px; text: "选择多个文件"; enabled: !root.busy; clicked => { root.choose-files(); } }
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        LineEdit { horizontal-stretch: 1; text: root.source-search; placeholder-text: "搜索文件名、Sheet 或路径"; edited(value) => { root.source-search = value; root.source-search-changed(value); } }
+                        Text { width: 270px; text: root.sources-summary; color: #475569; font-size: 11px; vertical-alignment: center; horizontal-alignment: right; }
+                        ActionButton { width: 58px; height: 32px; text: "全选"; enabled: root.has-sources && !root.busy; clicked => { root.select-all-sources(true); } }
+                        ActionButton { width: 72px; height: 32px; text: "全不选"; enabled: root.has-sources && !root.busy; clicked => { root.select-all-sources(false); } }
+                    }
+                    if !root.has-sources: Rectangle { vertical-stretch: 1; border-radius: 10px; border-width: 1px; border-color: #bfdbfe; background: #f8fbff;
+                        VerticalLayout { alignment: center; spacing: 7px;
+                            Text { text: "把 Excel / CSV 拖到这里"; horizontal-alignment: center; color: #334155; font-size: 17px; font-weight: 650; }
+                            Text { text: "也可以选择文件夹，软件会递归查找所有支持的工作簿"; horizontal-alignment: center; color: #64748b; font-size: 12px; }
                         }
-                        Text {
-                            text: root.input-label;
-                            color: #64748b;
-                            font-size: 11px;
-                            overflow: elide;
-                        }
-                        HorizontalLayout {
-                            Text {
-                                horizontal-stretch: 1;
-                                text: root.sources-summary;
-                                color: #334155;
-                                font-size: 12px;
-                                font-weight: 650;
+                    }
+                    if root.has-sources: source-list := ListView { vertical-stretch: 1;
+                        for source[row] in root.sources: Rectangle {
+                            width: source-list.width - 4px; height: source.is-group ? 44px : 72px;
+                            border-radius: 8px; background: source.is-group ? #eaf2ff : (Math.mod(row, 2) == 0 ? #f8fafc : #ffffff);
+                            border-width: 1px; border-color: source.is-group ? #bfdbfe : #eef2f7;
+                            if source.is-group: HorizontalLayout { padding-left: 12px; padding-right: 10px; spacing: 8px;
+                                Text { width: 18px; text: source.collapsed ? "›" : "⌄"; color: #2563eb; font-size: 18px; vertical-alignment: center; }
+                                Text { horizontal-stretch: 1; text: source.file-name; color: #1e3a5f; font-size: 13px; font-weight: 700; vertical-alignment: center; overflow: elide; }
+                                Text { text: source.detail; color: #64748b; font-size: 11px; vertical-alignment: center; }
+                                ActionButton { width: 58px; height: 28px; text: "展开/收起"; clicked => { root.toggle-source-group(source.path); } }
                             }
-                            ActionButton {
-                                width: 62px;
-                                height: 30px;
-                                text: "全选";
-                                enabled: root.has-sources && !root.busy;
-                                clicked => { root.select-all-sources(true); }
-                            }
-                            ActionButton {
-                                width: 72px;
-                                height: 30px;
-                                text: "全部取消";
-                                enabled: root.has-sources && !root.busy;
-                                clicked => { root.select-all-sources(false); }
-                            }
-                        }
-
-                        if !root.has-sources: Rectangle {
-                            vertical-stretch: 1;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #dbe3ee;
-                            background: #f8fafc;
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: 8px;
-                                Text {
-                                    text: "尚无数据表";
-                                    horizontal-alignment: center;
-                                    color: #475569;
-                                    font-size: 16px;
-                                    font-weight: 650;
+                            if !source.is-group: HorizontalLayout { padding: 9px; spacing: 9px;
+                                CheckBox { width: 26px; checked: source.enabled; enabled: !root.busy; toggled => { root.source-enabled-changed(source.source-index, self.checked); } }
+                                VerticalLayout { horizontal-stretch: 1; spacing: 2px;
+                                    Text { text: source.sheet-name; color: #0f172a; font-size: 13px; font-weight: 650; overflow: elide; }
+                                    Text { text: source.detail + "  ·  推荐表头第 " + source.suggested-row; color: #64748b; font-size: 11px; overflow: elide; }
                                 }
-                                Text {
-                                    text: "选择一个文件夹或多个工作簿开始";
-                                    horizontal-alignment: center;
-                                    color: #94a3b8;
-                                    font-size: 12px;
-                                }
-                            }
-                        }
-
-                        if root.has-sources: source-list := ListView {
-                            vertical-stretch: 1;
-                            for source[index] in root.sources: Rectangle {
-                                width: source-list.width - 4px;
-                                height: 92px;
-                                border-radius: 9px;
-                                background: Math.mod(index, 2) == 0 ? #f8fafc : #ffffff;
-                                border-width: 1px;
-                                border-color: source.enabled ? #dbeafe : #eef2f7;
-                                VerticalLayout {
-                                    padding: 10px;
-                                    spacing: 6px;
-                                    HorizontalLayout {
-                                        spacing: 9px;
-                                        enabled-check := CheckBox {
-                                            min-width: 26px;
-                                            max-width: 26px;
-                                            checked: source.enabled;
-                                            enabled: !root.busy;
-                                            toggled => { root.source-enabled-changed(index, self.checked); }
-                                        }
-                                        Text {
-                                            horizontal-stretch: 1;
-                                            text: source.file-name;
-                                            color: #0f172a;
-                                            font-size: 13px;
-                                            font-weight: 650;
-                                            overflow: elide;
-                                        }
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 7px;
-                                        Rectangle { min-width: 35px; max-width: 35px; background: transparent; }
-                                        Text {
-                                            horizontal-stretch: 1;
-                                            text: source.sheet-name + "  ·  " + source.detail;
-                                            color: #64748b;
-                                            font-size: 11px;
-                                            overflow: elide;
-                                            vertical-alignment: center;
-                                        }
-                                        Text {
-                                            text: "表头行";
-                                            color: #475569;
-                                            font-size: 11px;
-                                            font-weight: 600;
-                                            vertical-alignment: center;
-                                        }
-                                        SpinBox {
-                                            min-width: 88px;
-                                            max-width: 88px;
-                                            min-height: 28px;
-                                            max-height: 28px;
-                                            value: source.header-row;
-                                            minimum: 1;
-                                            maximum: 100000;
-                                            enabled: !root.busy;
-                                            edited(value) => { root.header-row-changed(index, value); }
-                                        }
-                                    }
-                                }
+                                Text { width: 54px; text: "表头行"; color: #475569; font-size: 11px; vertical-alignment: center; }
+                                SpinBox { width: 82px; value: source.header-row; minimum: 1; maximum: 100000; enabled: !root.busy; edited(value) => { root.header-changed(source.source-index, value, source.header-rows); } }
+                                Text { width: 54px; text: "表头层"; color: #475569; font-size: 11px; vertical-alignment: center; }
+                                SpinBox { width: 68px; value: source.header-rows; minimum: 1; maximum: 3; enabled: !root.busy; edited(value) => { root.header-changed(source.source-index, source.header-row, value); } }
+                                ActionButton { width: 68px; height: 30px; text: "预览"; enabled: !root.busy; clicked => { root.preview-source(source.source-index); root.active-page = 2; root.preview-mode = 0; } }
+                                ActionButton { width: 56px; height: 30px; text: "移除"; enabled: !root.busy; clicked => { root.remove-source(source.source-index); } }
                             }
                         }
                     }
+                    Text { text: root.input-label; color: #94a3b8; font-size: 10px; overflow: elide; }
                 }
+            }
 
-                Surface {
-                    horizontal-stretch: 1;
-                    VerticalLayout {
-                        padding: 18px;
-                        spacing: 10px;
-                        Text { text: "2  设置合并规则"; color: #0f172a; font-size: 18px; font-weight: 700; }
-                        Text {
-                            text: "表头匹配忽略英文大小写，并自动去除首尾空格";
-                            color: #64748b;
-                            font-size: 12px;
-                        }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            ModeButton {
-                                horizontal-stretch: 1;
-                                text: "并集";
-                                selected: root.mode-index == 0;
-                                clicked => { root.mode-index = 0; root.mode-changed(0); }
+            if root.active-page == 1: Surface { x: 16px; y: 14px; width: parent.width - 32px; height: parent.height - 28px;
+                VerticalLayout { padding: 16px; spacing: 9px;
+                    Text { text: "设置合并规则"; color: #0f172a; font-size: 19px; font-weight: 700; }
+                    HorizontalLayout { spacing: 7px;
+                        ModeButton { horizontal-stretch: 1; text: "列名并集"; selected: root.mode-index == 0; clicked => { root.mode-index = 0; root.mode-changed(0); } }
+                        ModeButton { horizontal-stretch: 1; text: "列名交集"; selected: root.mode-index == 1; clicked => { root.mode-index = 1; root.mode-changed(1); } }
+                        ModeButton { horizontal-stretch: 1; text: "修正表头"; selected: root.mode-index == 2; clicked => { root.mode-index = 2; root.mode-changed(2); } }
+                        ModeButton { horizontal-stretch: 1; text: "按键汇总"; selected: root.mode-index == 3; clicked => { root.mode-index = 3; root.mode-changed(3); } }
+                        ModeButton { horizontal-stretch: 1; text: "横向关联"; selected: root.mode-index == 4; clicked => { root.mode-index = 4; root.mode-changed(4); } }
+                    }
+                    HorizontalLayout { spacing: 9px;
+                        VerticalLayout { width: 330px; spacing: 8px;
+                            OptionToggle { title: "记录来源文件"; description: "输出中增加文件名列"; checked: root.include-source-file; toggled(value) => { root.include-source-file = value; root.include-source-file-changed(value); } }
+                            OptionToggle { title: "记录来源工作表"; description: "输出中增加 Sheet 名列"; checked: root.include-source-sheet; toggled(value) => { root.include-source-sheet = value; root.include-source-sheet-changed(value); } }
+                            OptionToggle { title: "删除重复行"; description: "有键字段时按键，否则按整行"; checked: root.deduplicate; toggled(value) => { root.deduplicate = value; root.advanced-options-changed(root.key-columns, value, root.filter-column, root.filter-text, root.filter-exclude, root.join-kind-index); } }
+                            Text { text: "键字段（多个用英文逗号分隔）"; color: #334155; font-size: 11px; font-weight: 600; }
+                            LineEdit { text: root.key-columns; placeholder-text: "例如：订单号, 日期"; edited(value) => { root.key-columns = value; root.advanced-options-changed(value, root.deduplicate, root.filter-column, root.filter-text, root.filter-exclude, root.join-kind-index); } }
+                            if root.mode-index == 4: HorizontalLayout { spacing: 5px;
+                                ModeButton { horizontal-stretch: 1; text: "左关联"; selected: root.join-kind-index == 0; clicked => { root.join-kind-index = 0; root.advanced-options-changed(root.key-columns, root.deduplicate, root.filter-column, root.filter-text, root.filter-exclude, 0); } }
+                                ModeButton { horizontal-stretch: 1; text: "内关联"; selected: root.join-kind-index == 1; clicked => { root.join-kind-index = 1; root.advanced-options-changed(root.key-columns, root.deduplicate, root.filter-column, root.filter-text, root.filter-exclude, 1); } }
+                                ModeButton { horizontal-stretch: 1; text: "全关联"; selected: root.join-kind-index == 2; clicked => { root.join-kind-index = 2; root.advanced-options-changed(root.key-columns, root.deduplicate, root.filter-column, root.filter-text, root.filter-exclude, 2); } }
                             }
-                            ModeButton {
-                                horizontal-stretch: 1;
-                                text: "交集";
-                                selected: root.mode-index == 1;
-                                clicked => { root.mode-index = 1; root.mode-changed(1); }
-                            }
-                            ModeButton {
-                                horizontal-stretch: 1;
-                                text: "手动映射";
-                                selected: root.mode-index == 2;
-                                clicked => { root.mode-index = 2; root.mode-changed(2); }
-                            }
-                        }
-                        Text {
-                            text: root.mode-index == 0 ? "保留所有数据表出现过的列"
-                                : root.mode-index == 1 ? "只保留全部已选数据表共有的列"
-                                : "以并集为基础，只修正写错或含义相同的列名";
-                            color: #64748b;
-                            font-size: 11px;
-                        }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            OptionToggle {
-                                horizontal-stretch: 1;
-                                title: "记录来源文件";
-                                description: "输出中增加文件名列";
-                                checked: root.include-source-file;
-                                toggled(value) => {
-                                    root.include-source-file = value;
-                                    root.include-source-file-changed(value);
-                                }
-                            }
-                            OptionToggle {
-                                horizontal-stretch: 1;
-                                title: "记录来源工作表";
-                                description: "输出中增加 Sheet 名列";
-                                checked: root.include-source-sheet;
-                                toggled(value) => {
-                                    root.include-source-sheet = value;
-                                    root.include-source-sheet-changed(value);
-                                }
-                            }
-                        }
-
-                        if root.mode-index != 2: Rectangle {
-                            vertical-stretch: 1;
-                            background: #f8fafc;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #e2e8f0;
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: 8px;
-                                Text {
-                                    text: root.mode-index == 0 ? "按列名自动取并集" : "按列名自动取交集";
-                                    horizontal-alignment: center;
-                                    color: #334155;
-                                    font-size: 16px;
-                                    font-weight: 650;
-                                }
-                                Text {
-                                    text: "无需额外设置，可以直接开始合并";
-                                    horizontal-alignment: center;
-                                    color: #94a3b8;
-                                    font-size: 12px;
-                                }
-                            }
-                        }
-
-                        if root.mode-index == 2 && !root.has-sources: Rectangle {
-                            vertical-stretch: 1;
-                            background: #f8fafc;
-                            border-radius: 10px;
-                            Text {
-                                text: "请先选择并勾选数据表";
-                                color: #64748b;
-                                font-size: 14px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        if root.mode-index == 2 && root.has-sources: VerticalLayout {
-                            vertical-stretch: 1;
-                            spacing: 8px;
-                            HorizontalLayout {
-                                spacing: 8px;
-                                ComboBox {
-                                    horizontal-stretch: 1;
-                                    model: root.mapping-tables;
-                                    current-index: root.mapping-table-index;
-                                    selected(value) => {
-                                        root.mapping-table-index = self.current-index;
-                                        root.mapping-table-changed(self.current-index);
+                            Text { text: "筛选（字段包含文本）"; color: #334155; font-size: 11px; font-weight: 600; }
+                            HorizontalLayout { spacing: 6px; LineEdit { width: 112px; text: root.filter-column; placeholder-text: "字段名"; edited(value) => { root.filter-column = value; root.advanced-options-changed(root.key-columns, root.deduplicate, value, root.filter-text, root.filter-exclude, root.join-kind-index); } } LineEdit { horizontal-stretch: 1; text: root.filter-text; placeholder-text: "包含文本"; edited(value) => { root.filter-text = value; root.advanced-options-changed(root.key-columns, root.deduplicate, root.filter-column, value, root.filter-exclude, root.join-kind-index); } } }
+                            CheckBox { text: "反向：排除匹配行"; checked: root.filter-exclude; toggled => { root.filter-exclude = self.checked; root.advanced-options-changed(root.key-columns, root.deduplicate, root.filter-column, root.filter-text, self.checked, root.join-kind-index); } }
+                            Text { text: "输出字段顺序"; color: #334155; font-size: 11px; font-weight: 600; }
+                            column-list := ListView { vertical-stretch: 1;
+                                for column in root.output-columns: Rectangle { width: column-list.width - 4px; height: 38px; background: #f8fafc; border-radius: 6px;
+                                    HorizontalLayout { padding-left: 8px; padding-right: 6px; spacing: 4px;
+                                        Text { horizontal-stretch: 1; text: column.name; color: #334155; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                                        ActionButton { width: 28px; height: 26px; text: "↑"; clicked => { root.move-output-column(column.column-index, -1); } }
+                                        ActionButton { width: 28px; height: 26px; text: "↓"; clicked => { root.move-output-column(column.column-index, 1); } }
                                     }
                                 }
-                                ActionButton {
-                                    width: 112px;
-                                    text: "恢复本表默认";
-                                    clicked => { root.reset-mapping(); }
-                                }
                             }
-                            HorizontalLayout {
-                                Text {
-                                    horizontal-stretch: 1;
-                                    text: "将不同写法改成相同目标列名，其他字段仍按并集输出";
-                                    color: #64748b;
-                                    font-size: 11px;
-                                }
-                                ActionButton {
-                                    width: 188px;
-                                    height: 32px;
-                                    text: root.common-fields-label;
-                                    clicked => { root.toggle-common-fields(); }
-                                }
+                        }
+                        Rectangle { width: 1px; background: #e2e8f0; }
+                        VerticalLayout { horizontal-stretch: 1; spacing: 7px;
+                            HorizontalLayout { spacing: 7px;
+                                ComboBox { horizontal-stretch: 1; model: root.mapping-tables; current-index: root.mapping-table-index; selected(value) => { root.mapping-table-index = self.current-index; root.mapping-table-changed(self.current-index); } }
+                                LineEdit { width: 180px; text: root.mapping-search; placeholder-text: "搜索字段"; edited(value) => { root.mapping-search = value; root.mapping-search-changed(value); } }
+                                ActionButton { width: 106px; text: root.mismatch-only ? "显示全部" : "只看差异"; clicked => { root.mismatch-only = !root.mismatch-only; root.mismatch-only-changed(root.mismatch-only); } }
+                                ActionButton { width: 100px; text: "应用建议"; clicked => { root.apply-suggestions(); } }
+                                ActionButton { width: 92px; text: "恢复本表"; clicked => { root.reset-mapping(); } }
                             }
-                            mapping-list := ListView {
-                                vertical-stretch: 1;
-                                for mapping[index] in root.mappings: Rectangle {
-                                    width: mapping-list.width - 4px;
-                                    height: 68px;
-                                    border-radius: 9px;
-                                    background: Math.mod(index, 2) == 0 ? #f8fafc : #ffffff;
-                                    border-width: 1px;
-                                    border-color: #eef2f7;
-                                    HorizontalLayout {
-                                        padding: 9px;
-                                        spacing: 8px;
-                                        map-check := CheckBox {
-                                            width: 26px;
-                                            checked: mapping.enabled;
-                                            toggled => {
-                                                root.mapping-changed(mapping.mapping-index, self.checked, mapping.target-name);
-                                            }
-                                        }
-                                        Text {
-                                            width: 150px;
-                                            text: mapping.source-name;
-                                            color: #334155;
-                                            font-size: 12px;
-                                            font-weight: 600;
-                                            overflow: elide;
-                                            vertical-alignment: center;
-                                        }
-                                        Text {
-                                            width: 20px;
-                                            text: "→";
-                                            color: #2563eb;
-                                            font-size: 17px;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
-                                        LineEdit {
-                                            horizontal-stretch: 1;
-                                            text: mapping.target-name;
-                                            enabled: map-check.checked;
-                                            placeholder-text: "目标列名";
-                                            edited(value) => {
-                                                root.mapping-changed(mapping.mapping-index, map-check.checked, value);
-                                            }
-                                        }
+                            HorizontalLayout { Text { horizontal-stretch: 1; text: "字段映射与清洗"; color: #64748b; font-size: 11px; } ActionButton { width: 176px; height: 30px; text: root.common-fields-label; clicked => { root.toggle-common-fields(); } } }
+                            mapping-list := ListView { vertical-stretch: 1;
+                                for mapping in root.mappings: Rectangle { width: mapping-list.width - 4px; height: 66px; border-radius: 8px; background: #f8fafc; border-width: 1px; border-color: mapping.suggestion == "" ? #eef2f7 : #bfdbfe;
+                                    HorizontalLayout { padding: 8px; spacing: 7px;
+                                        CheckBox { width: 25px; checked: mapping.enabled; toggled => { root.mapping-changed(mapping.mapping-index, self.checked, mapping.target-name); } }
+                                        VerticalLayout { width: 180px; spacing: 2px; Text { text: mapping.source-name; color: #334155; font-size: 12px; font-weight: 600; overflow: elide; } Text { text: mapping.suggestion == "" ? "" : "建议 → " + mapping.suggestion; color: #2563eb; font-size: 10px; overflow: elide; } }
+                                        Text { width: 18px; text: "→"; color: #2563eb; font-size: 16px; vertical-alignment: center; }
+                                        LineEdit { horizontal-stretch: 1; text: mapping.target-name; enabled: mapping.enabled; edited(value) => { root.mapping-changed(mapping.mapping-index, true, value); } }
+                                        ComboBox { width: 104px; model: ["不处理", "去空格", "转大写", "转小写"]; current-index: mapping.transform-index; selected(value) => { root.mapping-operation-changed(mapping.mapping-index, self.current-index, mapping.aggregate-index); } }
+                                        if root.mode-index == 3: ComboBox { width: 104px; model: ["取首值", "求和", "唯一拼接", "文本拼接"]; current-index: mapping.aggregate-index; selected(value) => { root.mapping-operation-changed(mapping.mapping-index, mapping.transform-index, self.current-index); } }
                                     }
                                 }
                             }
@@ -605,132 +241,67 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+
+            if root.active-page == 2: Surface { x: 16px; y: 14px; width: parent.width - 32px; height: parent.height - 28px;
+                VerticalLayout { padding: 16px; spacing: 9px;
+                    HorizontalLayout { spacing: 7px;
+                        Text { horizontal-stretch: 1; text: "预览与合并前检查"; color: #0f172a; font-size: 19px; font-weight: 700; }
+                        ModeButton { width: 112px; text: "源数据预览"; selected: root.preview-mode == 0; clicked => { root.preview-mode = 0; } }
+                        ModeButton { width: 112px; text: "结果预览"; selected: root.preview-mode == 1; clicked => { root.preview-mode = 1; root.preview-merged(); } }
+                        ModeButton { width: 112px; text: "检查报告"; selected: root.preview-mode == 2; clicked => { root.preview-mode = 2; root.run-check(); } }
+                    }
+                    if root.preview-mode == 0: HorizontalLayout { spacing: 7px;
+                        ComboBox { horizontal-stretch: 1; model: root.mapping-tables; current-index: root.preview-table-index; selected(value) => { root.preview-table-index = self.current-index; root.preview-source(self.current-index); } }
+                        ActionButton { width: 92px; text: "刷新预览"; enabled: root.has-sources && !root.busy; clicked => { root.preview-source(root.preview-table-index); } }
+                    }
+                    if root.preview-mode == 1: HorizontalLayout { Text { horizontal-stretch: 1; text: "按当前规则显示前 30 行；正式导出仍采用流式处理"; color: #64748b; font-size: 11px; } ActionButton { width: 92px; text: "刷新预览"; clicked => { root.preview-merged(); } } }
+                    if root.preview-mode == 2: HorizontalLayout { Text { horizontal-stretch: 1; text: root.check-summary; color: #475569; font-size: 11px; } ActionButton { width: 92px; text: "重新检查"; clicked => { root.run-check(); } } ActionButton { width: 104px; text: "导出报告"; clicked => { root.export-check(); } } }
+                    Text { text: root.preview-title; color: #334155; font-size: 12px; font-weight: 650; overflow: elide; }
+                    if root.preview-mode != 2: preview-list := ListView { vertical-stretch: 1;
+                        for row in root.preview-rows: Rectangle { width: preview-list.width - 4px; height: 34px; background: row.header ? #eaf2ff : #ffffff; border-bottom-width: 1px; border-bottom-color: #eef2f7;
+                            HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 8px;
+                                Text { width: 42px; text: row.line-number; color: #94a3b8; font-size: 10px; vertical-alignment: center; horizontal-alignment: right; }
+                                Text { horizontal-stretch: 1; text: row.cells; color: row.header ? #1e3a5f : #334155; font-size: 11px; font-family: "Consolas"; font-weight: row.header ? 700 : 450; vertical-alignment: center; overflow: elide; }
+                            }
+                        }
+                    }
+                    if root.preview-mode == 2: check-list := ListView { vertical-stretch: 1;
+                        for issue in root.check-rows: Rectangle { width: check-list.width - 4px; height: 58px; border-radius: 8px; background: issue.level == 2 ? #fef2f2 : issue.level == 1 ? #fff7ed : #f8fafc; border-width: 1px; border-color: issue.level == 2 ? #fecaca : issue.level == 1 ? #fed7aa : #e2e8f0;
+                            HorizontalLayout { padding: 9px; spacing: 10px;
+                                Rectangle { width: 8px; border-radius: 4px; background: issue.level == 2 ? #dc2626 : issue.level == 1 ? #f59e0b : #3b82f6; }
+                                VerticalLayout { spacing: 2px; Text { text: issue.title; color: #1e293b; font-size: 12px; font-weight: 700; } Text { text: issue.detail; color: #64748b; font-size: 10px; overflow: elide; } }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        Rectangle {
-            height: 194px;
-            background: #ffffff;
-            border-width: 1px;
-            border-color: #dbe3ee;
-            VerticalLayout {
-                padding-left: 22px;
-                padding-right: 22px;
-                padding-top: 14px;
-                padding-bottom: 12px;
-                spacing: 8px;
-                HorizontalLayout {
-                    Text {
-                        horizontal-stretch: 1;
-                        text: "3  导出结果";
-                        color: #0f172a;
-                        font-size: 17px;
-                        font-weight: 700;
-                    }
-                    Text {
-                        text: "固定操作区 · 超限自动拆分 Sheet";
-                        color: #64748b;
-                        font-size: 11px;
-                    }
+        Rectangle { height: 158px; background: #ffffff; border-width: 1px; border-color: #dbe3ee;
+            VerticalLayout { padding-left: 20px; padding-right: 20px; padding-top: 11px; padding-bottom: 9px; spacing: 7px;
+                HorizontalLayout { spacing: 8px;
+                    Text { width: 70px; text: "输出位置"; color: #334155; font-size: 12px; vertical-alignment: center; font-weight: 600; }
+                    LineEdit { horizontal-stretch: 1; text: root.output-path; enabled: !root.busy; placeholder-text: "请选择输出文件"; edited(value) => { root.output-path = value; root.output-path-changed(value); } }
+                    ActionButton { width: 82px; text: "浏览…"; enabled: !root.busy; clicked => { root.choose-output(); } }
+                    Metric { label: "预计数据行"; value: root.rows-metric; } Metric { label: "输出列"; value: root.columns-metric; } Metric { label: "预计 Sheet"; value: root.sheets-metric; }
+                    if root.busy: ActionButton { width: 76px; text: "取消"; clicked => { root.cancel-merge(); } }
+                    ActionButton { width: 142px; text: root.busy ? "正在处理…" : "开始合并"; primary: true; enabled: root.can-start; clicked => { root.start-merge(); } }
                 }
-                HorizontalLayout {
-                    spacing: 9px;
-                    Text { width: 68px; text: "输出位置"; color: #334155; font-size: 12px; vertical-alignment: center; }
-                    output-edit := LineEdit {
-                        horizontal-stretch: 1;
-                        text: root.output-path;
-                        enabled: !root.busy;
-                        placeholder-text: "请选择输出文件";
-                        edited(value) => { root.output-path = value; root.output-path-changed(value); }
-                    }
-                    ActionButton {
-                        width: 88px;
-                        text: "浏览…";
-                        enabled: !root.busy;
-                        clicked => { root.choose-output(); }
-                    }
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    Metric { label: "预计数据行"; value: root.rows-metric; }
-                    Metric { label: "输出列"; value: root.columns-metric; }
-                    Metric { label: "预计 Sheet"; value: root.sheets-metric; }
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                    if root.busy: ActionButton {
-                        width: 84px;
-                        text: "取消";
-                        clicked => { root.cancel-merge(); }
-                    }
-                    ActionButton {
-                        width: 154px;
-                        text: root.busy ? "正在处理…" : "开始合并";
-                        primary: true;
-                        enabled: root.can-start;
-                        clicked => { root.start-merge(); }
-                    }
-                }
-                if root.show-progress: ProgressIndicator {
-                    height: 7px;
-                    progress: root.progress;
-                    indeterminate: root.busy && root.progress <= 0;
-                }
-                HorizontalLayout {
-                    Text {
-                        horizontal-stretch: 1;
-                        text: root.status-text;
-                        color: root.status-kind == 1 ? #15803d : root.status-kind == 2 ? #b91c1c : #64748b;
-                        font-size: 12px;
-                        font-weight: root.status-kind == 0 ? 450 : 650;
-                        wrap: word-wrap;
-                        vertical-alignment: top;
-                    }
-                    if root.can-reveal: ActionButton {
-                        width: 116px;
-                        height: 30px;
-                        text: "在文件夹中显示";
-                        clicked => { root.reveal-output(); }
-                    }
+                if root.show-progress: ProgressIndicator { height: 7px; progress: root.progress; indeterminate: root.busy && root.progress <= 0; }
+                HorizontalLayout { spacing: 8px;
+                    Text { horizontal-stretch: 1; text: root.status-text; color: root.status-kind == 1 ? #15803d : root.status-kind == 2 ? #b91c1c : #64748b; font-size: 11px; font-weight: root.status-kind == 0 ? 450 : 650; wrap: word-wrap; }
+                    if root.can-reveal: ActionButton { width: 112px; height: 28px; text: "在文件夹中显示"; clicked => { root.reveal-output(); } }
                 }
             }
         }
     }
 
-    if root.show-about: Rectangle {
-        width: 100%;
-        height: 100%;
-        background: #0f172a99;
-        TouchArea { }
-        Rectangle {
-            width: 380px;
-            height: 250px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 16px;
-            border-width: 1px;
-            border-color: #cbd5e1;
-            background: #ffffff;
-            VerticalLayout {
-                padding: 22px;
-                spacing: 10px;
-                Text {
-                    text: "关于 表格合并";
-                    color: #0f172a;
-                    font-size: 20px;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                }
-                Text {
-                    text: "版本 0.2.2  ·  本地 Excel / CSV 合并工具";
-                    color: #64748b;
-                    font-size: 11px;
-                    horizontal-alignment: center;
-                }
+    if root.show-about: Rectangle { width: 100%; height: 100%; background: #0f172a99; TouchArea { }
+        Rectangle { width: 420px; height: 300px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; border-radius: 16px; border-width: 1px; border-color: #cbd5e1; background: #ffffff;
+            VerticalLayout { padding: 22px; spacing: 10px;
+                HorizontalLayout { Image { width: 40px; height: 40px; source: @image-url("../assets/app-icon.svg"); } VerticalLayout { horizontal-stretch: 1; Text { text: "表格合并"; color: #0f172a; font-size: 20px; font-weight: 700; } Text { text: "v0.3.0  ·  本地批量表格工具"; color: #64748b; font-size: 11px; } } }
                 AboutSlint { vertical-stretch: 1; }
-                ActionButton {
-                    height: 36px;
-                    text: "关闭";
-                    primary: true;
-                    clicked => { root.show-about = false; }
-                }
+                HorizontalLayout { spacing: 7px; ActionButton { horizontal-stretch: 1; height: 34px; text: root.update-text; clicked => { root.check-update(); } } ActionButton { width: 86px; height: 34px; text: "查看日志"; clicked => { root.open-log(); } } ActionButton { width: 72px; height: 34px; text: "关闭"; primary: true; clicked => { root.show-about = false; } } }
             }
         }
     }

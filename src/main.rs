@@ -3,6 +3,8 @@
 slint::include_modules!();
 
 mod app;
+mod config;
+mod inspect;
 mod merge;
 mod model;
 mod scan;
