@@ -44,8 +44,10 @@ pub fn save_scheme(path: &Path, scheme: &MergeScheme) -> Result<()> {
 }
 
 pub fn load_scheme(path: &Path) -> Result<MergeScheme> {
-    let content = fs::read_to_string(path).with_context(|| format!("无法读取方案 {}", path.display()))?;
-    let scheme: MergeScheme = serde_json::from_str(&content).with_context(|| "方案文件格式不正确")?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("无法读取方案 {}", path.display()))?;
+    let scheme: MergeScheme =
+        serde_json::from_str(&content).with_context(|| "方案文件格式不正确")?;
     if scheme.format_version > 1 {
         anyhow::bail!("该方案由更高版本的软件创建，当前版本无法读取");
     }

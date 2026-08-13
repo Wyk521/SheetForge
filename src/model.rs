@@ -237,7 +237,12 @@ pub fn build_output_plan(tables: &[SourceTable], options: &MergeOptions) -> Outp
             .enumerate()
             .map(|(index, name)| (header_key(name), index))
             .collect();
-        headers.sort_by_key(|name| positions.get(&header_key(name)).copied().unwrap_or(usize::MAX));
+        headers.sort_by_key(|name| {
+            positions
+                .get(&header_key(name))
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
     }
 
     let source_file_column = options
@@ -341,17 +346,19 @@ pub fn source_to_output_map(
         .collect();
 
     match mode {
-        MergeMode::Union | MergeMode::Intersection | MergeMode::Consolidate | MergeMode::Join => table
-            .headers
-            .iter()
-            .enumerate()
-            .filter_map(|(source_index, name)| {
-                output_indices
-                    .get(&header_key(name))
-                    .copied()
-                    .map(|output_index| (source_index, output_index))
-            })
-            .collect(),
+        MergeMode::Union | MergeMode::Intersection | MergeMode::Consolidate | MergeMode::Join => {
+            table
+                .headers
+                .iter()
+                .enumerate()
+                .filter_map(|(source_index, name)| {
+                    output_indices
+                        .get(&header_key(name))
+                        .copied()
+                        .map(|output_index| (source_index, output_index))
+                })
+                .collect()
+        }
         MergeMode::Manual => table
             .mappings
             .iter()
@@ -399,11 +406,17 @@ mod tests {
         let tables = vec![table(&["姓名", "年龄"]), table(&["姓名", "城市"])];
         let union = build_output_plan(
             &tables,
-            &MergeOptions { mode: MergeMode::Union, ..Default::default() },
+            &MergeOptions {
+                mode: MergeMode::Union,
+                ..Default::default()
+            },
         );
         let intersection = build_output_plan(
             &tables,
-            &MergeOptions { mode: MergeMode::Intersection, ..Default::default() },
+            &MergeOptions {
+                mode: MergeMode::Intersection,
+                ..Default::default()
+            },
         );
         assert_eq!(union.headers, vec!["姓名", "年龄", "城市"]);
         assert_eq!(intersection.headers, vec!["姓名"]);
@@ -414,10 +427,16 @@ mod tests {
         let tables = vec![table(&["姓名", "手机号"]), table(&["姓名", "联系电话"])];
         let manual = build_output_plan(
             &tables,
-            &MergeOptions { mode: MergeMode::Manual, ..Default::default() },
+            &MergeOptions {
+                mode: MergeMode::Manual,
+                ..Default::default()
+            },
         );
         assert_eq!(manual.headers, vec!["姓名", "手机号", "联系电话"]);
-        assert_eq!(common_header_keys(&tables), HashSet::from(["姓名".to_owned()]));
+        assert_eq!(
+            common_header_keys(&tables),
+            HashSet::from(["姓名".to_owned()])
+        );
     }
 
     #[test]
@@ -428,7 +447,10 @@ mod tests {
         b.mappings[0].target_name = "电话".to_owned();
         let plan = build_output_plan(
             &[a, b],
-            &MergeOptions { mode: MergeMode::Manual, ..Default::default() },
+            &MergeOptions {
+                mode: MergeMode::Manual,
+                ..Default::default()
+            },
         );
         assert_eq!(plan.headers, vec!["电话"]);
     }
