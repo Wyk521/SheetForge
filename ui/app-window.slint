@@ -103,10 +103,11 @@ export component AppWindow inherits Window {
     in property <[SourceRow]> sources; in property <[string]> mapping-tables; in property <[MappingRow]> mappings;
     in property <[PreviewRow]> preview-rows; in property <[CheckRow]> check-rows; in property <[ColumnRow]> output-columns;
     in property <[length]> preview-column-widths; in property <string> app-version: "0.0.0";
+    in property <[string]> recent-folders; in property <[string]> recent-schemes;
+    in-out property <int> recent-folders-index: 0; in-out property <int> recent-schemes-index: 0;
     in-out property <string> output-path; in-out property <int> mode-index: 0; in-out property <int> mapping-table-index: 0;
     in-out property <int> preview-table-index: 0; in-out property <int> active-page: 0; in-out property <int> preview-mode: 0;
     in-out property <bool> include-source-file: false; in-out property <bool> include-source-sheet: false;
-    in-out property <bool> detect-csv-numbers: true;
     in-out property <bool> deduplicate: false; in-out property <bool> filter-exclude: false; in-out property <int> join-kind-index: 0;
     in-out property <string> source-search; in-out property <string> mapping-search; in-out property <bool> mismatch-only: false;
     in-out property <string> key-columns; in-out property <string> filter-column; in-out property <string> filter-text;
@@ -114,19 +115,27 @@ export component AppWindow inherits Window {
     in property <string> rows-metric: "0"; in property <string> columns-metric: "0"; in property <string> sheets-metric: "1";
     in property <string> status-text; in property <int> status-kind: 0; in property <float> progress: 0;
     in property <bool> busy: false; in property <bool> has-sources: false; in property <bool> can-start: false; in property <bool> can-reveal: false; in property <bool> show-progress: false;
-    in property <string> preview-title: "尚未生成预览"; in property <string> check-summary: "尚未检查"; in property <string> update-text: "检查更新";
-    in-out property <bool> show-about: false;
+    in property <string> preview-title: "尚未生成预览"; in property <string> check-summary: "尚未检查"; in property <bool> check-clean: false; in property <string> update-text: "检查更新";
+    in-out property <bool> show-about: false; in-out property <string> selected-cell: "";
 
     callback choose-folder(); callback choose-files(); callback source-enabled-changed(int, bool); callback select-all-sources(bool);
     callback toggle-source-group(string); callback source-group-enabled-changed(string, bool); callback apply-source-group-header(string); callback remove-source-group(string);
     callback remove-source(int); callback header-changed(int, int, int); callback source-search-changed(string);
-    callback mode-changed(int); callback include-source-file-changed(bool); callback include-source-sheet-changed(bool); callback detect-csv-numbers-changed(bool);
+    callback mode-changed(int); callback include-source-file-changed(bool); callback include-source-sheet-changed(bool);
+    callback recent-folder-selected(string); callback recent-scheme-selected(string); callback copy-cell(string);
     callback mapping-table-changed(int); callback mapping-changed(int, bool, string); callback mapping-operation-changed(int, int, int);
     callback reset-mapping(); callback toggle-common-fields(); callback mapping-search-changed(string); callback mismatch-only-changed(bool); callback apply-suggestions();
     callback advanced-options-changed(string, bool, string, string, bool, int); callback move-output-column(int, int);
     callback save-scheme(); callback load-scheme(); callback preview-source(int); callback preview-merged(); callback run-check(); callback export-check();
     callback output-path-changed(string); callback choose-output(); callback start-merge(); callback cancel-merge(); callback reveal-output();
     callback check-update(); callback open-log(); callback can-drop(data-transfer) -> bool; callback files-dropped(data-transfer);
+
+    FocusScope {
+        KeyBinding { keys: @keys(Control + O); enabled: !root.busy; activated => { root.choose-files(); } }
+        KeyBinding { keys: @keys(Control + S); enabled: root.has-sources && !root.busy; activated => { root.save-scheme(); } }
+        KeyBinding { keys: @keys(Control + L); enabled: !root.busy; activated => { root.load-scheme(); } }
+        KeyBinding { keys: @keys(Escape); activated => { root.show-about = false; } }
+    }
 
     VerticalLayout { spacing: 0px;
         Rectangle { height: 82px; background: @linear-gradient(90deg, #102f5c 0%, #1e40af 58%, #2563eb 100%);
@@ -162,6 +171,8 @@ export component AppWindow inherits Window {
                         }
                         ActionButton { width: 112px; text: "选择文件夹"; primary: true; enabled: !root.busy; clicked => { root.choose-folder(); } }
                         ActionButton { width: 122px; text: "选择多个文件"; enabled: !root.busy; clicked => { root.choose-files(); } }
+                        ComboBox { width: 138px; model: root.recent-folders; current-index: root.recent-folders-index; selected(value) => { if (self.current-index > 0) { root.recent-folder-selected(value); } } }
+                        ComboBox { width: 138px; model: root.recent-schemes; current-index: root.recent-schemes-index; selected(value) => { if (self.current-index > 0) { root.recent-scheme-selected(value); } } }
                     }
                     HorizontalLayout { spacing: 8px;
                         LineEdit { horizontal-stretch: 1; text: root.source-search; placeholder-text: "搜索文件名、Sheet 或路径"; edited(value) => { root.source-search = value; root.source-search-changed(value); } }
@@ -219,11 +230,10 @@ export component AppWindow inherits Window {
                         ModeButton { horizontal-stretch: 1; text: "横向关联"; selected: root.mode-index == 4; clicked => { root.mode-index = 4; root.mode-changed(4); } }
                     }
                     HorizontalLayout { spacing: 9px;
-                        VerticalLayout { width: 330px; spacing: 8px;
+                        VerticalLayout { width: 330px; horizontal-stretch: root.mode-index <= 1 ? 1 : 0; spacing: 8px;
                             OptionToggle { title: "记录来源文件"; description: "输出中增加文件名列"; checked: root.include-source-file; toggled(value) => { root.include-source-file = value; root.include-source-file-changed(value); } }
                             OptionToggle { title: "记录来源工作表"; description: "输出中增加 Sheet 名列"; checked: root.include-source-sheet; toggled(value) => { root.include-source-sheet = value; root.include-source-sheet-changed(value); } }
                             OptionToggle { title: "删除重复行"; description: "有键字段时按键，否则按整行"; checked: root.deduplicate; toggled(value) => { root.deduplicate = value; root.advanced-options-changed(root.key-columns, value, root.filter-column, root.filter-text, root.filter-exclude, root.join-kind-index); } }
-                            OptionToggle { title: "识别 CSV 数字"; description: "把 CSV 中纯数字的单元格按数值输出"; checked: root.detect-csv-numbers; toggled(value) => { root.detect-csv-numbers = value; root.detect-csv-numbers-changed(value); } }
                             Text { text: "键字段（多个用英文逗号分隔）"; color: #334155; font-size: 11px; font-weight: 600; }
                             LineEdit { text: root.key-columns; placeholder-text: "例如：订单号, 日期"; edited(value) => { root.key-columns = value; root.advanced-options-changed(value, root.deduplicate, root.filter-column, root.filter-text, root.filter-exclude, root.join-kind-index); } }
                             if root.mode-index == 4: HorizontalLayout { spacing: 5px;
@@ -245,8 +255,14 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
-                        Rectangle { width: 1px; background: #e2e8f0; }
-                        VerticalLayout { horizontal-stretch: 1; spacing: 7px;
+                        if root.mode-index <= 1: Rectangle { horizontal-stretch: 1; border-radius: 10px; border-width: 1px; border-color: #dbe3ee; background: #f8fafc;
+                            VerticalLayout { alignment: center; spacing: 8px; padding: 18px;
+                                Text { text: "并集 / 交集模式不修改字段"; color: #1e293b; font-size: 13px; font-weight: 650; horizontal-alignment: center; }
+                                Text { text: "输出字段直接取自各表的原始表头。需要改名、纠错或清洗字段时，请切换到「修正表头」模式。"; color: #64748b; font-size: 11px; horizontal-alignment: center; wrap: word-wrap; }
+                            }
+                        }
+                        if root.mode-index >= 2: Rectangle { width: 1px; background: #e2e8f0; }
+                        if root.mode-index >= 2: VerticalLayout { horizontal-stretch: 1; spacing: 7px;
                             HorizontalLayout { spacing: 7px;
                                 ComboBox { horizontal-stretch: 1; model: root.mapping-tables; current-index: root.mapping-table-index; selected(value) => { root.mapping-table-index = self.current-index; root.mapping-table-changed(self.current-index); } }
                                 LineEdit { width: 180px; text: root.mapping-search; placeholder-text: "搜索字段"; edited(value) => { root.mapping-search = value; root.mapping-search-changed(value); } }
@@ -285,8 +301,9 @@ export component AppWindow inherits Window {
                         ActionButton { width: 92px; text: "刷新预览"; enabled: root.has-sources && !root.busy; clicked => { root.preview-source(root.preview-table-index); } }
                     }
                     if root.preview-mode == 1: HorizontalLayout { Text { horizontal-stretch: 1; text: "按当前规则显示前 30 行；正式导出仍采用流式处理"; color: #64748b; font-size: 11px; } ActionButton { width: 92px; text: "刷新预览"; clicked => { root.preview-merged(); } } }
-                    if root.preview-mode == 2: HorizontalLayout { Text { horizontal-stretch: 1; text: root.check-summary; color: #475569; font-size: 11px; } ActionButton { width: 92px; text: "重新检查"; clicked => { root.run-check(); } } ActionButton { width: 104px; text: "导出报告"; clicked => { root.export-check(); } } }
+                    if root.preview-mode == 2: HorizontalLayout { Text { horizontal-stretch: 1; text: root.check-summary; color: root.check-clean ? #15803d : #475569; font-size: 11px; font-weight: root.check-clean ? 650 : 450; } ActionButton { width: 92px; text: "重新检查"; clicked => { root.run-check(); } } ActionButton { width: 104px; text: "导出报告"; clicked => { root.export-check(); } } }
                     Text { text: root.preview-title; color: #334155; font-size: 12px; font-weight: 650; overflow: elide; }
+                    Text { text: "选中单元格： " + root.selected-cell; visible: root.selected-cell != ""; color: #1d4ed8; font-size: 10px; overflow: elide; }
                     if root.preview-mode != 2: ScrollView { vertical-stretch: 1; horizontal-scrollbar-policy: ScrollBarPolicy.as-needed;
                         VerticalLayout {
                             for row in root.preview-rows: Rectangle { height: 34px; background: row.header ? #eaf2ff : #ffffff;
@@ -298,6 +315,8 @@ export component AppWindow inherits Window {
                                     }
                                     for cell[col] in row.cells: Rectangle { width: root.preview-column-widths[col]; border-width: 1px; border-color: #f1f5f9;
                                         TouchArea { width: 100%; height: 100%; mouse-cursor: text;
+                                            clicked => { root.selected-cell = cell; }
+                                            double-clicked => { root.copy-cell(cell); }
                                             HorizontalLayout { padding-left: 6px; padding-right: 6px;
                                                 Text { text: cell; color: row.header ? #1e3a5f : #334155; font-size: 11px; font-family: "Consolas"; font-weight: row.header ? 700 : 450; vertical-alignment: center; overflow: elide; }
                                             }
@@ -341,7 +360,7 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.show-about: Rectangle { width: 100%; height: 100%; background: #0f172a99; TouchArea { }
+    if root.show-about: Rectangle { width: 100%; height: 100%; background: #0f172a99; TouchArea { clicked => { root.show-about = false; } }
         Rectangle { width: 420px; height: 300px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; border-radius: 16px; border-width: 1px; border-color: #cbd5e1; background: #ffffff;
             VerticalLayout { padding: 22px; spacing: 10px;
                 HorizontalLayout { Image { width: 40px; height: 40px; source: @image-url("../assets/app-icon.svg"); } VerticalLayout { horizontal-stretch: 1; Text { text: "表格合并"; color: #0f172a; font-size: 20px; font-weight: 700; } Text { text: "v" + root.app-version + "  ·  本地批量表格工具"; color: #64748b; font-size: 11px; } } }

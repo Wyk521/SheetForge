@@ -150,19 +150,12 @@ fn merge_appended(
                         cancel,
                     )
                 };
-                let detect_numbers = options.detect_csv_numbers;
                 for_each_csv_row(
                     &table.path,
                     delimiter,
                     table.header_row,
                     table.header_rows,
-                    |row| {
-                        consume(
-                            row.into_iter()
-                                .map(|value| csv_cell(value, detect_numbers))
-                                .collect(),
-                        )
-                    },
+                    |row| consume(row.into_iter().map(CellValue::Text).collect()),
                 )
                 .with_context(|| format!("处理 {} 时失败", table.display_name()))?;
             }
@@ -256,7 +249,7 @@ fn merge_consolidated(
     let total = tables.iter().map(|table| table.estimated_rows).sum();
     let mut current = 0;
     for table in tables {
-        for_each_table_row(table, options.detect_csv_numbers, |values| {
+        for_each_table_row(table, |values| {
             if cancel.load(Ordering::Relaxed) {
                 return Err(MergeCancelled.into());
             }
@@ -305,7 +298,7 @@ fn merge_joined(
     let mut progress = 0;
     for (table_index, table) in tables.iter().enumerate() {
         let mut incoming = HashMap::<String, Vec<CellValue>>::new();
-        for_each_table_row(table, options.detect_csv_numbers, |values| {
+        for_each_table_row(table, |values| {
             if cancel.load(Ordering::Relaxed) {
                 return Err(MergeCancelled.into());
             }
@@ -356,7 +349,7 @@ fn merge_joined(
     finish_sink(sink, output, count, cancel)
 }
 
-fn for_each_table_row<F>(table: &SourceTable, detect_numbers: bool, mut callback: F) -> Result<()>
+fn for_each_table_row<F>(table: &SourceTable, mut callback: F) -> Result<()>
 where
     F: FnMut(Vec<CellValue>) -> Result<()>,
 {
@@ -366,13 +359,7 @@ where
             delimiter,
             table.header_row,
             table.header_rows,
-            |row| {
-                callback(
-                    row.into_iter()
-                        .map(|value| csv_cell(value, detect_numbers))
-                        .collect(),
-                )
-            },
+            |row| callback(row.into_iter().map(CellValue::Text).collect()),
         ),
         SourceKind::Workbook => {
             let mut workbook = open_workbook_auto(&table.path)?;
@@ -656,34 +643,6 @@ impl CellValue {
     }
 }
 
-/// 把 CSV 文本单元格转换为数值（仅当「识别 CSV 数字」开启且整串是合法数字）。
-fn csv_cell(value: String, detect_numbers: bool) -> CellValue {
-    if detect_numbers && looks_like_number(&value) {
-        if let Ok(number) = value.trim().parse::<f64>() {
-            if number.is_finite() {
-                return CellValue::Number(number);
-            }
-        }
-    }
-    CellValue::Text(value)
-}
-
-fn looks_like_number(value: &str) -> bool {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    // 排除前导零（如 "007"），避免把编号当数字；"0"、"0.5" 不受影响。
-    if trimmed.len() > 1 && trimmed.starts_with('0') && trimmed.as_bytes()[1].is_ascii_digit() {
-        return false;
-    }
-    // 排除千分位（"1,234"）和带空格的对齐数字。
-    if trimmed.contains(',') || trimmed.contains(' ') {
-        return false;
-    }
-    trimmed.parse::<f64>().is_ok()
-}
-
 struct XlsxSink {
     workbook: Workbook,
     plan: OutputPlan,
@@ -876,21 +835,6 @@ mod tests {
             merge_tables(&[table], &MergeOptions::default(), &output, &tx, &cancel).unwrap();
         assert!(result.is_none());
         assert!(!output.exists());
-    }
-    #[test]
-    fn csv_number_detection_is_conservative() {
-        assert!(matches!(
-            csv_cell("12.5".into(), true),
-            CellValue::Number(_)
-        ));
-        assert!(matches!(csv_cell("007".into(), true), CellValue::Text(_)));
-        assert!(matches!(csv_cell("1,234".into(), true), CellValue::Text(_)));
-        assert!(matches!(csv_cell("1 234".into(), true), CellValue::Text(_)));
-        assert!(matches!(csv_cell("abc".into(), true), CellValue::Text(_)));
-        assert!(matches!(csv_cell("".into(), true), CellValue::Text(_)));
-        assert!(matches!(csv_cell("0.5".into(), true), CellValue::Number(_)));
-        assert!(matches!(csv_cell("12".into(), true), CellValue::Number(_)));
-        assert!(matches!(csv_cell("12".into(), false), CellValue::Text(_)));
     }
     #[test]
     fn excel_datetime_components_format_and_round_trip() {

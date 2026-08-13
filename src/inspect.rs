@@ -296,6 +296,28 @@ pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIss
             "汇总或横向关联至少需要一个键字段。",
         ));
     }
+    if !options.filter_text.trim().is_empty() {
+        if options.filter_column.trim().is_empty() {
+            issues.push(issue(
+                IssueLevel::Warning,
+                "筛选字段未填写",
+                "已设置筛选文本，但字段名为空，筛选不会生效。",
+            ));
+        } else if !plan
+            .headers
+            .iter()
+            .any(|header| header_key(header) == header_key(&options.filter_column))
+        {
+            issues.push(issue(
+                IssueLevel::Error,
+                "筛选字段不存在",
+                &format!(
+                    "输出列中没有“{}”，筛选不会生效，请检查字段名。",
+                    options.filter_column
+                ),
+            ));
+        }
+    }
     issues.sort_by_key(|item| std::cmp::Reverse(item.level));
     issues
 }

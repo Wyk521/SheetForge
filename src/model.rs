@@ -131,16 +131,10 @@ pub struct MergeOptions {
     pub filter_text: String,
     #[serde(default)]
     pub filter_exclude: bool,
-    #[serde(default = "default_true")]
-    pub detect_csv_numbers: bool,
 }
 
 fn default_join_separator() -> String {
     "；".to_owned()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for MergeOptions {
@@ -157,7 +151,6 @@ impl Default for MergeOptions {
             filter_column: String::new(),
             filter_text: String::new(),
             filter_exclude: false,
-            detect_csv_numbers: true,
         }
     }
 }

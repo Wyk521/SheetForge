@@ -67,6 +67,8 @@ struct MergeApp {
     /// preflight 通过后是否继续进入合并流程（由「开始合并」触发时为 true，
     /// 由「检查报告」触发时为 false）。
     preflight_continues: bool,
+    /// 是否执行过合并前检查（用于区分「尚未检查」和「检查通过」）。
+    check_ran: bool,
     progress: f32,
     progress_label: String,
     warnings: Vec<String>,
@@ -98,6 +100,7 @@ impl Default for MergeApp {
             cancel: Arc::new(AtomicBool::new(false)),
             state: AppState::Ready,
             preflight_continues: false,
+            check_ran: false,
             progress: 0.0,
             progress_label: String::new(),
             warnings: Vec::new(),
@@ -178,6 +181,7 @@ impl MergeApp {
         self.warnings.clear();
         self.preview = None;
         self.check_issues.clear();
+        self.check_ran = false;
         spawn_scan(paths, tx);
     }
     fn start_table_reload(&mut self, index: usize, header_row: usize, header_rows: usize) {
@@ -308,6 +312,26 @@ impl MergeApp {
     fn run_preflight(&mut self) {
         self.run_preflight_background(false);
     }
+    fn open_scheme(&mut self, path: &Path) {
+        match load_scheme(path) {
+            Ok(scheme) => {
+                self.sources = scheme.tables;
+                self.options = scheme.options;
+                self.ensure_mapping_selection();
+                self.input_label = format!("已打开方案：{}", path.display());
+                self.check_issues.clear();
+                self.check_ran = false;
+                remember(
+                    &mut self.settings.recent_schemes,
+                    path.display().to_string(),
+                );
+                let _ = save_settings(&self.settings);
+            }
+            Err(error) => {
+                self.state = AppState::Error(format!("打开方案失败：{error:#}"));
+            }
+        }
+    }
     fn start_update_check(&mut self) {
         if let Some(url) = self.update_url.clone() {
             let _ = webbrowser::open(&url);
@@ -375,6 +399,7 @@ impl MergeApp {
                     self.selected_mapping_table = index;
                     self.preview = None;
                     self.check_issues.clear();
+                    self.check_ran = false;
                     self.progress = 1.0;
                     self.progress_label = format!("表头已刷新：{name}");
                     self.state = AppState::Ready;
@@ -389,6 +414,7 @@ impl MergeApp {
                     }
                     self.preview = None;
                     self.check_issues.clear();
+                    self.check_ran = false;
                     self.progress = 1.0;
                     self.progress_label = format!("已统一刷新 {count} 个数据表的表头");
                     self.state = AppState::Ready;
@@ -435,6 +461,7 @@ impl MergeApp {
                         .filter(|issue| issue.level == IssueLevel::Warning)
                         .count();
                     self.check_issues = issues;
+                    self.check_ran = true;
                     if let Some(issue) = self
                         .check_issues
                         .iter()
@@ -608,21 +635,46 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
             .add_filter("表格合并方案", &["json"])
             .pick_file()
         {
-            match load_scheme(&path) {
-                Ok(scheme) => {
-                    let mut app = state.borrow_mut();
-                    app.sources = scheme.tables;
-                    app.options = scheme.options;
-                    app.ensure_mapping_selection();
-                    app.input_label = format!("已打开方案：{}", path.display());
-                    remember(&mut app.settings.recent_schemes, path.display().to_string());
-                    let _ = save_settings(&app.settings);
-                }
-                Err(error) => {
-                    state.borrow_mut().state = AppState::Error(format!("打开方案失败：{error:#}"))
-                }
+            state.borrow_mut().open_scheme(&path);
+        }
+    });
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_recent_folder_selected(move |value| {
+        let mut app = callback_state.borrow_mut();
+        if !app.busy() {
+            app.start_folder_scan(PathBuf::from(value.to_string()));
+        }
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_recent_scheme_selected(move |value| {
+        let mut app = callback_state.borrow_mut();
+        if !app.busy() {
+            app.open_scheme(&PathBuf::from(value.to_string()));
+        }
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_copy_cell(move |value| {
+        let copied = arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(value.to_string()));
+        let mut app = callback_state.borrow_mut();
+        match copied {
+            Ok(()) => {
+                app.progress_label =
+                    format!("已复制单元格内容（{} 个字符）", value.chars().count());
+            }
+            Err(error) => {
+                app.state = AppState::Error(format!("复制到剪贴板失败：{error}"));
             }
         }
+        drop(app);
+        sync_weak(&weak, &callback_state);
     });
 
     let weak = ui.as_weak();
@@ -764,12 +816,6 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
     let callback_state = state.clone();
     ui.on_include_source_sheet_changed(move |value| {
         callback_state.borrow_mut().options.include_source_sheet = value;
-        sync_weak(&weak, &callback_state);
-    });
-    let weak = ui.as_weak();
-    let callback_state = state.clone();
-    ui.on_detect_csv_numbers_changed(move |value| {
-        callback_state.borrow_mut().options.detect_csv_numbers = value;
         sync_weak(&weak, &callback_state);
     });
     let weak = ui.as_weak();
@@ -1191,10 +1237,33 @@ fn sync_ui(ui: &AppWindow, app: &MergeApp) {
         .filter(|issue| issue.level == IssueLevel::Warning)
         .count();
     ui.set_check_summary(if app.check_issues.is_empty() {
-        "尚未检查".into()
+        if app.check_ran {
+            "检查完成：未发现问题".into()
+        } else {
+            "尚未检查".into()
+        }
     } else {
         format!("检查完成：{errors} 个错误，{warnings} 个提醒").into()
     });
+    ui.set_check_clean(app.check_ran && app.check_issues.is_empty());
+    let mut recent_folders = vec!["最近文件夹…".to_owned()];
+    recent_folders.extend(app.settings.recent_folders.iter().cloned());
+    ui.set_recent_folders(ModelRc::new(VecModel::from(
+        recent_folders
+            .iter()
+            .map(|value| SharedString::from(value.as_str()))
+            .collect::<Vec<_>>(),
+    )));
+    let mut recent_schemes = vec!["最近方案…".to_owned()];
+    recent_schemes.extend(app.settings.recent_schemes.iter().cloned());
+    ui.set_recent_schemes(ModelRc::new(VecModel::from(
+        recent_schemes
+            .iter()
+            .map(|value| SharedString::from(value.as_str()))
+            .collect::<Vec<_>>(),
+    )));
+    ui.set_recent_folders_index(0);
+    ui.set_recent_schemes_index(0);
 
     let rows: u64 = app
         .sources
@@ -1224,7 +1293,6 @@ fn sync_ui(ui: &AppWindow, app: &MergeApp) {
     });
     ui.set_output_path(app.output_path.clone().into());
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
-    ui.set_detect_csv_numbers(app.options.detect_csv_numbers);
     ui.set_rows_metric(format_number(rows).into());
     ui.set_columns_metric(plan.headers.len().to_string().into());
     ui.set_sheets_metric(expected_sheets.to_string().into());
@@ -1365,9 +1433,8 @@ fn paths_from_drop_text(value: &str) -> Vec<PathBuf> {
             let line = line
                 .trim_matches('"')
                 .strip_prefix("file:///")
-                .unwrap_or(line)
-                .replace("%20", " ");
-            PathBuf::from(line)
+                .unwrap_or(line);
+            PathBuf::from(percent_decode(line))
         })
         .flat_map(|path| {
             if path.is_dir() {
@@ -1379,6 +1446,29 @@ fn paths_from_drop_text(value: &str) -> Vec<PathBuf> {
         .filter(|path| supported_file(path))
         .collect()
 }
+/// 解码拖放文本中的百分号转义（%XX），支持中文等非 ASCII 路径。
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && bytes[index + 1].is_ascii_hexdigit()
+            && bytes[index + 2].is_ascii_hexdigit()
+        {
+            let high = (bytes[index + 1] as char).to_digit(16).unwrap();
+            let low = (bytes[index + 2] as char).to_digit(16).unwrap();
+            output.push((high * 16 + low) as u8);
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
+
 fn format_number(value: u64) -> String {
     let text = value.to_string();
     let mut output = String::with_capacity(text.len() + text.len() / 3);
@@ -1440,5 +1530,14 @@ mod tests {
         assert!(!is_newer_version("v0.2.9", "0.3.1"));
         assert!(is_newer_version("1.0.0", "0.9.9"));
         assert!(!is_newer_version("junk", "0.3.1"));
+    }
+
+    #[test]
+    fn percent_decode_handles_utf8_paths() {
+        assert_eq!(percent_decode("C%3A%5C%E4%B8%AD%E6%96%87"), "C:\\中文");
+        assert_eq!(percent_decode("a%20b.txt"), "a b.txt");
+        assert_eq!(percent_decode("plain.txt"), "plain.txt");
+        assert_eq!(percent_decode("bad%2"), "bad%2");
+        assert_eq!(percent_decode("100%25"), "100%");
     }
 }
