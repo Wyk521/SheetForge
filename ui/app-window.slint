@@ -95,7 +95,8 @@ export component AppWindow inherits Window {
     in-out property <bool> show-about: false;
 
     callback choose-folder(); callback choose-files(); callback source-enabled-changed(int, bool); callback select-all-sources(bool);
-    callback toggle-source-group(string); callback remove-source(int); callback header-changed(int, int, int); callback source-search-changed(string);
+    callback toggle-source-group(string); callback source-group-enabled-changed(string, bool); callback remove-source-group(string);
+    callback remove-source(int); callback header-changed(int, int, int); callback source-search-changed(string);
     callback mode-changed(int); callback include-source-file-changed(bool); callback include-source-sheet-changed(bool);
     callback mapping-table-changed(int); callback mapping-changed(int, bool, string); callback mapping-operation-changed(int, int, int);
     callback reset-mapping(); callback toggle-common-fields(); callback mapping-search-changed(string); callback mismatch-only-changed(bool); callback apply-suggestions();
@@ -156,10 +157,12 @@ export component AppWindow inherits Window {
                             border-radius: 8px; background: source.is-group ? #eaf2ff : (Math.mod(row, 2) == 0 ? #f8fafc : #ffffff);
                             border-width: 1px; border-color: source.is-group ? #bfdbfe : #eef2f7;
                             if source.is-group: HorizontalLayout { padding-left: 12px; padding-right: 10px; spacing: 8px;
+                                CheckBox { width: 26px; checked: source.enabled; enabled: !root.busy; toggled => { root.source-group-enabled-changed(source.path, self.checked); } }
                                 Text { width: 18px; text: source.collapsed ? "›" : "⌄"; color: #2563eb; font-size: 18px; vertical-alignment: center; }
                                 Text { horizontal-stretch: 1; text: source.file-name; color: #1e3a5f; font-size: 13px; font-weight: 700; vertical-alignment: center; overflow: elide; }
                                 Text { text: source.detail; color: #64748b; font-size: 11px; vertical-alignment: center; }
-                                ActionButton { width: 58px; height: 28px; text: "展开/收起"; clicked => { root.toggle-source-group(source.path); } }
+                                ActionButton { width: 72px; height: 28px; text: source.collapsed ? "展开" : "收起"; clicked => { root.toggle-source-group(source.path); } }
+                                ActionButton { width: 68px; height: 28px; text: "移除整簿"; enabled: !root.busy; clicked => { root.remove-source-group(source.path); } }
                             }
                             if !source.is-group: HorizontalLayout { padding: 9px; spacing: 9px;
                                 CheckBox { width: 26px; checked: source.enabled; enabled: !root.busy; toggled => { root.source-enabled-changed(source.source-index, self.checked); } }

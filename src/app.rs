@@ -593,6 +593,32 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
     });
     let weak = ui.as_weak();
     let callback_state = state.clone();
+    ui.on_source_group_enabled_changed(move |path, enabled| {
+        let path = path.to_string();
+        let mut app = callback_state.borrow_mut();
+        for table in &mut app.sources {
+            if table.path.display().to_string() == path {
+                table.enabled = enabled;
+            }
+        }
+        app.ensure_mapping_selection();
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
+    ui.on_remove_source_group(move |path| {
+        let path = path.to_string();
+        let mut app = callback_state.borrow_mut();
+        app.sources
+            .retain(|table| table.path.display().to_string() != path);
+        app.collapsed_groups.remove(&path);
+        app.ensure_mapping_selection();
+        drop(app);
+        sync_weak(&weak, &callback_state);
+    });
+    let weak = ui.as_weak();
+    let callback_state = state.clone();
     ui.on_remove_source(move |index| {
         let mut app = callback_state.borrow_mut();
         let index = index.max(0) as usize;
@@ -888,7 +914,12 @@ fn sync_ui(ui: &AppWindow, app: &MergeApp) {
             collapsed,
             file_name: file_name.into(),
             sheet_name: "".into(),
-            detail: format!("{} 个数据表", tables.len()).into(),
+            detail: format!(
+                "{} 个数据表 · 已选 {} 个",
+                tables.len(),
+                tables.iter().filter(|(_, table)| table.enabled).count()
+            )
+            .into(),
             path: path.clone().into(),
             header_row: 1,
             header_rows: 1,
