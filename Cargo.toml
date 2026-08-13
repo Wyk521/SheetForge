@@ -29,6 +29,9 @@ webbrowser = "1.0"
 slint-build = "1.17.1"
 winresource = "0.1.31"
 
+[dev-dependencies]
+tempfile = "3.27"
+
 [package.metadata.winresource]
 ProductName = "表格合并"
 FileDescription = "Excel 和 CSV 表格合并工具"

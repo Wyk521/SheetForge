@@ -334,4 +334,26 @@ mod tests {
         let _ = std::fs::remove_file(output);
     }
     #[test] fn transformations_are_applied() { assert_eq!(CellValue::Text(" Ab ".into()).transformed(TransformOp::Lowercase).as_text(), "ab"); }
+    #[test]
+    fn cancelled_merge_does_not_create_partial_output() {
+        let headers = vec!["id".to_owned()];
+        let table = SourceTable {
+            path: PathBuf::from("does-not-need-to-exist.csv"),
+            sheet_name: "CSV".to_owned(),
+            kind: SourceKind::Csv { delimiter: b',' },
+            header_row: 1,
+            header_rows: 1,
+            suggested_header_row: 1,
+            mappings: crate::model::make_default_mappings(&headers),
+            headers,
+            estimated_rows: 1,
+            enabled: true,
+        };
+        let output = std::env::temp_dir().join(format!("cancelled-{}.xlsx", std::process::id()));
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cancel = AtomicBool::new(true);
+        let result = merge_tables(&[table], &MergeOptions::default(), &output, &tx, &cancel).unwrap();
+        assert!(result.is_none());
+        assert!(!output.exists());
+    }
 }

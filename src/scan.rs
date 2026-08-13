@@ -137,7 +137,7 @@ fn scan_csv(path: &Path, delimiter: u8, header_row: usize, header_rows: usize, s
         header_parts.push(record.iter().map(decode_csv_field).collect::<Vec<_>>());
     }
     let headers = combine_header_rows(&header_parts);
-    let estimated_rows = count_remaining_csv_rows(path, delimiter, header_row + header_rows)?;
+    let estimated_rows = count_remaining_csv_rows(path, delimiter, header_row + header_rows - 1)?;
     Ok(SourceTable { path: path.to_owned(), sheet_name: "CSV".to_owned(), kind: SourceKind::Csv { delimiter },
         header_row, header_rows, suggested_header_row: suggested_header_row.max(1), mappings: make_default_mappings(&headers),
         headers, estimated_rows, enabled: true })
@@ -261,6 +261,7 @@ where F: FnMut(Vec<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn header_recommendation_skips_report_title() {
@@ -272,5 +273,35 @@ mod tests {
     fn multi_row_headers_are_combined_and_deduplicated() {
         let headers = combine_header_rows(&[vec!["客户".into(), "金额".into()], vec!["姓名".into(), "金额".into()]]);
         assert_eq!(headers, vec!["客户 / 姓名", "金额"]);
+    }
+
+    #[test]
+    fn delimiter_detection_respects_quoted_commas() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("带 空格.csv");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "姓名;说明;金额").unwrap();
+        writeln!(file, "张三;\"北京,朝阳\";12").unwrap();
+        writeln!(file, "李四;\"上海,浦东\";15").unwrap();
+        assert_eq!(detect_delimiter(&path).unwrap(), b';');
+        let tables = scan_file(&path).unwrap();
+        assert_eq!(tables[0].headers, vec!["姓名", "说明", "金额"]);
+    }
+
+    #[test]
+    fn csv_reader_handles_multiline_quoted_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("quoted.csv");
+        std::fs::write(&path, "id,note\n1,\"line one\nline two\"\n").unwrap();
+        let table = scan_file(&path).unwrap().remove(0);
+        let mut values = Vec::new();
+        if let SourceKind::Csv { delimiter } = table.kind {
+            for_each_csv_row(&path, delimiter, table.header_row, table.header_rows, |row| {
+                values.push(row);
+                Ok(())
+            }).unwrap();
+        }
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0][1], "line one\nline two");
     }
 }

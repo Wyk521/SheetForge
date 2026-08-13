@@ -432,4 +432,20 @@ mod tests {
         );
         assert_eq!(plan.headers, vec!["电话"]);
     }
+
+    #[test]
+    fn merge_options_round_trip_as_scheme_data() {
+        let options = MergeOptions {
+            mode: MergeMode::Join,
+            key_columns: vec!["订单号".to_owned(), "日期".to_owned()],
+            join_kind: JoinKind::Full,
+            deduplicate: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&options).unwrap();
+        let restored: MergeOptions = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.mode, MergeMode::Join);
+        assert_eq!(restored.join_kind, JoinKind::Full);
+        assert_eq!(restored.key_columns.len(), 2);
+    }
 }
