@@ -461,7 +461,15 @@ pub fn detect_delimiter(path: &Path) -> Result<u8> {
             })
             .unwrap_or(1);
         let consistent = widths.iter().filter(|width| **width == mode_width).count();
-        let score = consistent as i64 * 100 + mode_width as i64 * 10 - widths.len() as i64;
+        // A wrong delimiter can split a quoted multiline field into several
+        // physical one-column records.  Consistency alone would then make that
+        // delimiter look better than the real one.  Prefer a stable table with
+        // multiple columns; genuinely single-column files still fall back to
+        // the first candidate (comma).
+        let single_column_penalty = if mode_width == 1 { 10_000 } else { 0 };
+        let score = consistent as i64 * 100 + mode_width as i64 * 50
+            - widths.len() as i64
+            - single_column_penalty;
         if score > best.0 {
             best = (score, delimiter);
         }
@@ -547,6 +555,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("quoted.csv");
         std::fs::write(&path, "id,note\n1,\"line one\nline two\"\n").unwrap();
+        assert_eq!(detect_delimiter(&path).unwrap(), b',');
         let table = scan_file(&path).unwrap().remove(0);
         let mut values = Vec::new();
         if let SourceKind::Csv { delimiter } = table.kind {

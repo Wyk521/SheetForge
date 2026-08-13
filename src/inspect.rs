@@ -1,7 +1,7 @@
 use crate::model::{
     build_output_plan, header_key, source_to_output_map, MergeOptions, SourceKind, SourceTable,
 };
-use crate::scan::{decode_csv_field, for_each_csv_row};
+use crate::scan::decode_csv_field;
 use anyhow::{Context, Result};
 use calamine::{open_workbook_auto, Data, Reader};
 use csv::{ByteRecord, ReaderBuilder};
@@ -31,18 +31,15 @@ pub fn preview_source(table: &SourceTable, limit: usize) -> Result<PreviewTable>
     let mut rows = Vec::new();
     match table.kind {
         SourceKind::Csv { delimiter } => {
-            for_each_csv_row(
-                &table.path,
-                delimiter,
-                table.header_row,
-                table.header_rows,
-                |row| {
-                    if rows.len() < limit {
-                        rows.push(row);
-                    }
-                    Ok(())
-                },
-            )?;
+            let mut reader = ReaderBuilder::new()
+                .has_headers(false)
+                .flexible(true)
+                .delimiter(delimiter)
+                .from_path(&table.path)?;
+            let skip = table.header_row + table.header_rows - 1;
+            for record in reader.byte_records().skip(skip).take(limit) {
+                rows.push(record?.iter().map(decode_csv_field).collect());
+            }
         }
         SourceKind::Workbook => {
             let mut workbook = open_workbook_auto(&table.path)?;
@@ -131,6 +128,11 @@ pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIss
         ));
     }
     let rows: u64 = enabled.iter().map(|table| table.estimated_rows).sum();
+    let bytes: u64 = enabled
+        .iter()
+        .filter_map(|table| std::fs::metadata(&table.path).ok())
+        .map(|metadata| metadata.len())
+        .sum();
     let sheets = rows.div_ceil(1_048_575).max(1);
     issues.push(issue(
         IssueLevel::Info,
@@ -139,6 +141,11 @@ pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIss
             "预计 {rows} 行、{} 列、约 {sheets} 个结果 Sheet。",
             plan.headers.len()
         ),
+    ));
+    issues.push(issue(
+        IssueLevel::Info,
+        "输入文件规模",
+        &format!("已选数据源合计约 {:.1} MB。", bytes as f64 / 1_048_576.0),
     ));
 
     let all_header_sets = enabled
@@ -157,6 +164,14 @@ pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIss
         .cloned()
         .collect::<HashSet<_>>();
     for (table, set) in enabled.iter().zip(all_header_sets.iter()) {
+        if !table.path.exists() {
+            issues.push(issue(
+                IssueLevel::Error,
+                "源文件不存在",
+                &format!("{} 已被移动或删除。", table.path.display()),
+            ));
+            continue;
+        }
         let missing = union.difference(set).count();
         if missing > 0 {
             issues.push(issue(
@@ -188,6 +203,57 @@ pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIss
                     &format!("{}：{error:#}", table.display_name()),
                 ));
             }
+        }
+    }
+    let mut sampled_types = HashMap::<String, HashSet<&'static str>>::new();
+    let mut non_empty_counts = HashMap::<String, usize>::new();
+    for table in &enabled {
+        match preview_source(table, 100) {
+            Ok(preview) => {
+                for (column, header) in preview.headers.iter().enumerate() {
+                    let key = header_key(header);
+                    for row in &preview.rows {
+                        let value = row.get(column).map(|value| value.trim()).unwrap_or_default();
+                        if value.is_empty() {
+                            continue;
+                        }
+                        *non_empty_counts.entry(key.clone()).or_default() += 1;
+                        let kind = if value.parse::<f64>().is_ok() {
+                            "数字"
+                        } else if matches!(value.to_lowercase().as_str(), "true" | "false" | "是" | "否") {
+                            "布尔"
+                        } else {
+                            "文本"
+                        };
+                        sampled_types.entry(key.clone()).or_default().insert(kind);
+                    }
+                }
+            }
+            Err(error) => issues.push(issue(
+                IssueLevel::Error,
+                "无法抽样读取",
+                &format!("{}：{error:#}", table.display_name()),
+            )),
+        }
+    }
+    for (column, kinds) in sampled_types {
+        if kinds.len() > 1 {
+            let mut kinds = kinds.into_iter().collect::<Vec<_>>();
+            kinds.sort();
+            issues.push(issue(
+                IssueLevel::Warning,
+                "字段类型混合",
+                &format!("字段“{column}”的样本同时出现：{}。", kinds.join("、")),
+            ));
+        }
+    }
+    for column in &union {
+        if !non_empty_counts.contains_key(column) {
+            issues.push(issue(
+                IssueLevel::Warning,
+                "字段样本全空",
+                &format!("字段“{column}”在抽样行中没有非空值。"),
+            ));
         }
     }
     let mut similar = Vec::new();
