@@ -21,6 +21,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
       - name: Use stable Rust
         run: rustup default stable
 
@@ -28,8 +37,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: src-tauri
 
       - name: Check Rust formatting
+        working-directory: src-tauri
         run: cargo fmt --all -- --check
 
       - name: Upload reproducible sources
@@ -37,31 +48,39 @@ jobs:
         with:
           name: Reproducible-sources
           path: |
-            Cargo.lock
-            src/**/*.rs
+            src-tauri/Cargo.lock
+            src-tauri/src/**/*.rs
 
       - name: Lint
+        working-directory: src-tauri
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Test
+        working-directory: src-tauri
         run: cargo test --locked
 
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
 
       - name: Security audit
-        shell: pwsh
+        working-directory: src-tauri
         run: cargo audit
-      - name: Build release
-        run: cargo build --release --locked
 
-      - name: Prepare portable executable
+      - name: Build application
+        run: npm run tauri build
+
+      - name: Prepare artifacts
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target\release\SheetForge.exe dist\SheetForge.exe
+          Copy-Item src-tauri\target\release\SheetForge.exe dist\SheetForge.exe
+          Copy-Item src-tauri\target\release\bundle\nsis\*.exe dist\
+          Get-ChildItem dist\*.exe | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii dist\SHA256SUMS.txt
 
-      - name: Sign executable when certificate is configured
+      - name: Sign executables when certificate is configured
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
@@ -73,29 +92,21 @@ jobs:
           }
           $certificate = Join-Path $env:RUNNER_TEMP "codesign.pfx"
           [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
-          & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $certificate /p $env:WINDOWS_CERTIFICATE_PASSWORD dist\SheetForge.exe
-          if ($LASTEXITCODE -ne 0) { throw "代码签名失败" }
+          Get-ChildItem dist\*.exe | ForEach-Object {
+            & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $certificate /p $env:WINDOWS_CERTIFICATE_PASSWORD $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "代码签名失败: $($_.Name)" }
+          }
 
       - name: Attest portable executable
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: dist/SheetForge.exe
 
-      - name: Generate SHA256 checksums
-        shell: pwsh
-        run: |
-          Get-ChildItem dist\*.exe | Sort-Object Name | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)"
-          } | Set-Content -Encoding ascii dist\SHA256SUMS.txt
-
       - name: Upload Windows package
         uses: actions/upload-artifact@v7
         with:
           name: SheetForge-Windows-x64
-          path: |
-            dist/SheetForge.exe
-            dist/SHA256SUMS.txt
+          path: dist/*
           if-no-files-found: error
 
       - name: Publish release
@@ -112,11 +123,11 @@ jobs:
           if ("${{ github.ref }}" -like "refs/tags/v*") {
             $tag = "${{ github.ref_name }}"
           } else {
-            $manifest = Get-Content Cargo.toml -Raw
+            $manifest = Get-Content src-tauri\Cargo.toml -Raw
             if ($manifest -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw "无法读取版本号" }
             $tag = "v$($Matches[1])"
           }
-          $assets = @("dist\SheetForge.exe", "dist\SHA256SUMS.txt")
+          $assets = @("dist\SheetForge.exe", "dist\SHA256SUMS.txt") + (Get-ChildItem dist\*-setup.exe | ForEach-Object { $_.FullName })
           gh release view $tag --repo "${{ github.repository }}" *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag $assets --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "表格合并 $tag" --generate-notes

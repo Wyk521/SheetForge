@@ -1,8 +1,11 @@
 /target/
+/src-tauri/target/
+/node_modules/
+/dist/
 *.xlsx
 *.xls
 *.xlsb
 *.csv
 *.tsv
 !tests/fixtures/*.csv
-
+.mimosa/
