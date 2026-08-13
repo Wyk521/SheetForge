@@ -118,7 +118,7 @@ export component AppWindow inherits Window {
     in property <string> preview-title: "尚未生成预览"; in property <string> check-summary: "尚未检查"; in property <bool> check-clean: false; in property <string> update-text: "检查更新";
     in-out property <bool> show-about: false; in-out property <string> selected-cell: "";
 
-    callback choose-folder(); callback choose-files(); callback source-enabled-changed(int, bool); callback select-all-sources(bool);
+    callback choose-folder(); callback choose-files(); callback source-enabled-changed(int, bool); callback select-all-sources(bool); callback clear-sources();
     callback toggle-source-group(string); callback source-group-enabled-changed(string, bool); callback apply-source-group-header(string); callback remove-source-group(string);
     callback remove-source(int); callback header-changed(int, int, int); callback source-search-changed(string);
     callback mode-changed(int); callback include-source-file-changed(bool); callback include-source-sheet-changed(bool);
@@ -179,6 +179,7 @@ export component AppWindow inherits Window {
                         Text { width: 270px; text: root.sources-summary; color: #475569; font-size: 11px; vertical-alignment: center; horizontal-alignment: right; }
                         ActionButton { width: 58px; height: 32px; text: "全选"; enabled: root.has-sources && !root.busy; clicked => { root.select-all-sources(true); } }
                         ActionButton { width: 72px; height: 32px; text: "全不选"; enabled: root.has-sources && !root.busy; clicked => { root.select-all-sources(false); } }
+                        ActionButton { width: 58px; height: 32px; text: "清空"; enabled: root.has-sources && !root.busy; clicked => { root.clear-sources(); } }
                     }
                     if !root.has-sources: Rectangle { vertical-stretch: 1; border-radius: 10px; border-width: drop-area.has-drag ? 2px : 1px; border-color: drop-area.has-drag ? #2563eb : #bfdbfe; background: drop-area.has-drag ? #dbeafe : #f8fbff;
                         VerticalLayout { alignment: center; spacing: 7px;

@@ -69,6 +69,8 @@ struct MergeApp {
     preflight_continues: bool,
     /// 是否执行过合并前检查（用于区分「尚未检查」和「检查通过」）。
     check_ran: bool,
+    /// 本次扫描结果是否追加到现有数据源（而非替换）。
+    scan_append: bool,
     progress: f32,
     progress_label: String,
     warnings: Vec<String>,
@@ -101,6 +103,7 @@ impl Default for MergeApp {
             state: AppState::Ready,
             preflight_continues: false,
             check_ran: false,
+            scan_append: false,
             progress: 0.0,
             progress_label: String::new(),
             warnings: Vec::new(),
@@ -144,8 +147,12 @@ impl MergeApp {
             folder.display().to_string(),
         );
         let _ = save_settings(&self.settings);
-        self.output_path = folder.join("合并结果.xlsx").display().to_string();
-        self.start_scan(paths, folder.display().to_string());
+        let append = !self.sources.is_empty();
+        // 追加模式下保留用户已设置的输出位置，避免被新选择覆盖。
+        if self.output_path.trim().is_empty() {
+            self.output_path = folder.join("合并结果.xlsx").display().to_string();
+        }
+        self.start_scan(paths, folder.display().to_string(), append);
     }
     fn start_files_scan(&mut self, mut paths: Vec<PathBuf>) {
         paths.retain(|path| supported_file(path));
@@ -155,17 +162,27 @@ impl MergeApp {
             self.state = AppState::Error("没有找到支持的表格文件".to_owned());
             return;
         }
+        let append = !self.sources.is_empty();
+        if self.output_path.trim().is_empty() {
+            if let Some(folder) = paths.first().and_then(|path| path.parent()) {
+                self.output_path = folder.join("合并结果.xlsx").display().to_string();
+            }
+        }
         if let Some(folder) = paths.first().and_then(|path| path.parent()) {
-            self.output_path = folder.join("合并结果.xlsx").display().to_string();
             remember(
                 &mut self.settings.recent_folders,
                 folder.display().to_string(),
             );
             let _ = save_settings(&self.settings);
         }
-        self.start_scan(paths.clone(), format!("已选择 {} 个文件", paths.len()));
+        let label = if append {
+            format!("已选择 {} 个文件（追加）", paths.len())
+        } else {
+            format!("已选择 {} 个文件", paths.len())
+        };
+        self.start_scan(paths.clone(), label, append);
     }
-    fn start_scan(&mut self, mut paths: Vec<PathBuf>, label: String) {
+    fn start_scan(&mut self, mut paths: Vec<PathBuf>, label: String, append: bool) {
         let output = PathBuf::from(&self.output_path);
         paths.retain(|path| path != &output);
         if paths.is_empty() {
@@ -174,9 +191,14 @@ impl MergeApp {
         }
         let (tx, rx) = mpsc::channel();
         self.scan_rx = Some(rx);
+        self.scan_append = append;
         self.state = AppState::Scanning;
         self.progress = 0.0;
-        self.progress_label = "正在读取文件并自动识别表头…".to_owned();
+        self.progress_label = if append {
+            "正在追加并读取新文件…".to_owned()
+        } else {
+            "正在读取文件并自动识别表头…".to_owned()
+        };
         self.input_label = label;
         self.warnings.clear();
         self.preview = None;
@@ -381,11 +403,23 @@ impl MergeApp {
                     self.progress_label = format!("正在扫描：{name}");
                 }
                 ScanEvent::Finished { tables, warnings } => {
-                    self.sources = tables;
+                    let appended = self.scan_append;
+                    self.scan_append = false;
+                    if appended {
+                        let before = self.sources.len();
+                        self.sources = merge_sources(&self.sources, tables);
+                        let added = self.sources.len() - before;
+                        self.input_label = format!(
+                            "当前共 {} 个数据表（本次新增 {added} 个）",
+                            self.sources.len()
+                        );
+                    } else {
+                        self.sources = tables;
+                        self.options.output_order.clear();
+                    }
                     self.warnings = warnings;
                     self.selected_mapping_table = 0;
                     self.ensure_mapping_selection();
-                    self.options.output_order.clear();
                     self.progress = 1.0;
                     self.progress_label = format!("已识别 {} 个数据表", self.sources.len());
                     self.state = AppState::Ready;
@@ -698,6 +732,20 @@ fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
         app.ensure_mapping_selection();
         drop(app);
         sync_weak(&weak, &callback_state);
+    });
+    sync_callback!(on_clear_sources, |state: &Rc<RefCell<MergeApp>>| {
+        if state.borrow().sources.is_empty() || !confirm("确定清空所有数据源？") {
+            return;
+        }
+        let mut app = state.borrow_mut();
+        app.sources.clear();
+        app.warnings.clear();
+        app.preview = None;
+        app.check_issues.clear();
+        app.check_ran = false;
+        app.collapsed_groups.clear();
+        app.input_label = "尚未选择文件或文件夹，可直接拖放".to_owned();
+        app.ensure_mapping_selection();
     });
     let weak = ui.as_weak();
     let callback_state = state.clone();
@@ -1469,6 +1517,28 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&output).into_owned()
 }
 
+/// 把新扫描到的数据表合并进现有列表：按 (路径, Sheet 名) 去重，保留既有项，
+/// 新表追加在末尾，最后统一排序。用于「追加数据源」场景。
+fn merge_sources(existing: &[SourceTable], incoming: Vec<SourceTable>) -> Vec<SourceTable> {
+    let mut seen: HashSet<(PathBuf, String)> = existing
+        .iter()
+        .map(|table| (table.path.clone(), table.sheet_name.clone()))
+        .collect();
+    let mut result = existing.to_vec();
+    for table in incoming {
+        if seen.insert((table.path.clone(), table.sheet_name.clone())) {
+            result.push(table);
+        }
+    }
+    result.sort_by_key(|table| {
+        (
+            table.path.to_string_lossy().to_lowercase(),
+            table.sheet_name.to_lowercase(),
+        )
+    });
+    result
+}
+
 fn format_number(value: u64) -> String {
     let text = value.to_string();
     let mut output = String::with_capacity(text.len() + text.len() / 3);
@@ -1539,5 +1609,42 @@ mod tests {
         assert_eq!(percent_decode("plain.txt"), "plain.txt");
         assert_eq!(percent_decode("bad%2"), "bad%2");
         assert_eq!(percent_decode("100%25"), "100%");
+    }
+
+    #[test]
+    fn merge_sources_appends_dedupes_and_preserves_state() {
+        let headers = vec!["a".to_owned()];
+        let table = |path: &str, sheet: &str, enabled: bool| SourceTable {
+            path: PathBuf::from(path),
+            sheet_name: sheet.to_owned(),
+            kind: crate::model::SourceKind::Csv { delimiter: b',' },
+            header_row: 1,
+            header_rows: 1,
+            suggested_header_row: 1,
+            mappings: crate::model::make_default_mappings(&headers),
+            headers: headers.clone(),
+            estimated_rows: 0,
+            enabled,
+        };
+        let existing = vec![
+            table("b.xlsx", "Sheet1", false),
+            table("a.csv", "CSV", true),
+        ];
+        let incoming = vec![
+            table("b.xlsx", "Sheet1", true), // 重复：应被跳过，保留旧的 enabled 状态
+            table("c.csv", "CSV", true),     // 新增
+        ];
+        let merged = merge_sources(&existing, incoming);
+        assert_eq!(merged.len(), 3);
+        // 合并后统一排序：a.csv 在前
+        assert_eq!(merged[0].path.display().to_string(), "a.csv");
+        let b = merged
+            .iter()
+            .find(|table| table.path.ends_with("b.xlsx"))
+            .unwrap();
+        assert!(!b.enabled, "重复项应保留既有启用状态");
+        assert!(merged
+            .iter()
+            .any(|table| table.path.ends_with("c.csv") && table.enabled));
     }
 }
