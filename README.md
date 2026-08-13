@@ -1,4 +1,4 @@
-# SheetForge 表格工坊
+# 表格合并
 
 一个面向 Windows 的现代原生 GUI 工具，用来批量合并 Excel / CSV 数据。使用 Rust + Slint 开发，不依赖 Python、不依赖浏览器内核，也不上传数据。
 

@@ -1,6 +1,6 @@
 [package]
 name = "sheetforge"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "A fast, native Windows GUI for merging Excel and CSV files"
 license = "MIT"
@@ -22,6 +22,12 @@ walkdir = "2.5"
 
 [build-dependencies]
 slint-build = "1.17.1"
+winresource = "0.1.31"
+
+[package.metadata.winresource]
+ProductName = "表格合并"
+FileDescription = "Excel 和 CSV 表格合并工具"
+OriginalFilename = "SheetForge.exe"
 
 [profile.release]
 opt-level = "z"

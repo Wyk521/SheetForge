@@ -163,7 +163,8 @@ component OptionToggle inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: "SheetForge 表格工坊";
+    title: "表格合并";
+    icon: @image-url("../assets/app-icon.svg");
     preferred-width: 1180px;
     preferred-height: 820px;
     min-width: 960px;
@@ -226,17 +227,26 @@ export component AppWindow inherits Window {
                 padding-top: 15px;
                 padding-bottom: 15px;
                 spacing: 12px;
+                Image {
+                    min-width: 42px;
+                    max-width: 42px;
+                    min-height: 42px;
+                    max-height: 42px;
+                    source: @image-url("../assets/app-icon.svg");
+                    image-fit: contain;
+                    accessible-role: none;
+                }
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 2px;
                     Text {
-                        text: "SheetForge  表格工坊";
+                        text: "表格合并";
                         color: #ffffff;
                         font-size: 25px;
                         font-weight: 750;
                     }
                     Text {
-                        text: "快速、安全地合并 Excel 与 CSV  ·  本地处理，数据不上传";
+                        text: "Excel / CSV 批量合并  ·  数据仅在本机处理";
                         color: #bfdbfe;
                         font-size: 13px;
                     }
@@ -261,7 +271,7 @@ export component AppWindow inherits Window {
                 spacing: 14px;
 
                 Surface {
-                    horizontal-stretch: 44;
+                    width: 36%;
                     VerticalLayout {
                         padding: 18px;
                         spacing: 10px;
@@ -409,7 +419,7 @@ export component AppWindow inherits Window {
                 }
 
                 Surface {
-                    horizontal-stretch: 56;
+                    horizontal-stretch: 1;
                     VerticalLayout {
                         padding: 18px;
                         spacing: 10px;
@@ -702,14 +712,14 @@ export component AppWindow inherits Window {
                 padding: 22px;
                 spacing: 10px;
                 Text {
-                    text: "关于 SheetForge";
+                    text: "关于 表格合并";
                     color: #0f172a;
                     font-size: 20px;
                     font-weight: 700;
                     horizontal-alignment: center;
                 }
                 Text {
-                    text: "SheetForge v0.2.1  ·  本地 Excel / CSV 合并工具";
+                    text: "版本 0.2.2  ·  本地 Excel / CSV 合并工具";
                     color: #64748b;
                     font-size: 11px;
                     horizontal-alignment: center;
