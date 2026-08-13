@@ -170,7 +170,7 @@ export component AppWindow inherits Window {
     min-height: 680px;
     background: #f1f5f9;
     default-font-family: "Microsoft YaHei UI";
-    Palette.color-scheme: ColorScheme.light;
+    init => { Palette.color-scheme = ColorScheme.light; }
 
     in property <[SourceRow]> sources;
     in property <[string]> mapping-tables;
