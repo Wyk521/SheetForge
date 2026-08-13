@@ -1,5 +1,5 @@
 import {
-    AboutSlint, CheckBox, ComboBox, LineEdit, ListView, ProgressIndicator, SpinBox
+    AboutSlint, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, SpinBox
 } from "std-widgets.slint";
 
 export struct SourceRow {
@@ -114,6 +114,54 @@ component Metric inherits Rectangle {
     }
 }
 
+component OptionToggle inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> checked;
+    callback toggled(bool);
+
+    height: 52px;
+    border-radius: 9px;
+    border-width: 1px;
+    border-color: root.checked ? #93c5fd : #e2e8f0;
+    background: root.checked ? #eff6ff : (touch.has-hover ? #f8fafc : #ffffff);
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 10px;
+        Rectangle {
+            min-width: 20px;
+            max-width: 20px;
+            min-height: 20px;
+            max-height: 20px;
+            border-radius: 5px;
+            border-width: 1px;
+            border-color: root.checked ? #2563eb : #94a3b8;
+            background: root.checked ? #2563eb : #ffffff;
+            Text {
+                text: root.checked ? "✓" : "";
+                color: #ffffff;
+                font-size: 14px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        VerticalLayout {
+            spacing: 1px;
+            Text { text: root.title; color: #1e293b; font-size: 12px; font-weight: 650; }
+            Text { text: root.description; color: #64748b; font-size: 10px; overflow: elide; }
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.checked); }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "SheetForge 表格工坊";
     preferred-width: 1180px;
@@ -122,6 +170,7 @@ export component AppWindow inherits Window {
     min-height: 680px;
     background: #f1f5f9;
     default-font-family: "Microsoft YaHei UI";
+    Palette.color-scheme: ColorScheme.light;
 
     in property <[SourceRow]> sources;
     in property <[string]> mapping-tables;
@@ -145,6 +194,7 @@ export component AppWindow inherits Window {
     in property <bool> can-start: false;
     in property <bool> can-reveal: false;
     in property <bool> show-progress: false;
+    in-out property <bool> show-about: false;
 
     callback choose-folder();
     callback choose-files();
@@ -194,7 +244,12 @@ export component AppWindow inherits Window {
                 StepChip { number: "01"; text: "选择数据"; active: root.has-sources; }
                 StepChip { number: "02"; text: "设置规则"; active: root.has-sources; }
                 StepChip { number: "03"; text: "导出 XLSX"; active: root.can-reveal; }
-                AboutSlint { width: 94px; height: 34px; }
+                ActionButton {
+                    width: 58px;
+                    height: 34px;
+                    text: "关于";
+                    clicked => { root.show-about = true; }
+                }
             }
         }
 
@@ -291,47 +346,55 @@ export component AppWindow inherits Window {
                             vertical-stretch: 1;
                             for source[index] in root.sources: Rectangle {
                                 width: source-list.width - 4px;
-                                height: 76px;
+                                height: 92px;
                                 border-radius: 9px;
                                 background: Math.mod(index, 2) == 0 ? #f8fafc : #ffffff;
                                 border-width: 1px;
                                 border-color: source.enabled ? #dbeafe : #eef2f7;
-                                HorizontalLayout {
+                                VerticalLayout {
                                     padding: 10px;
-                                    spacing: 9px;
-                                    enabled-check := CheckBox {
-                                        width: 26px;
-                                        checked: source.enabled;
-                                        enabled: !root.busy;
-                                        toggled => { root.source-enabled-changed(index, self.checked); }
-                                    }
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: 3px;
+                                    spacing: 6px;
+                                    HorizontalLayout {
+                                        spacing: 9px;
+                                        enabled-check := CheckBox {
+                                            min-width: 26px;
+                                            max-width: 26px;
+                                            checked: source.enabled;
+                                            enabled: !root.busy;
+                                            toggled => { root.source-enabled-changed(index, self.checked); }
+                                        }
                                         Text {
+                                            horizontal-stretch: 1;
                                             text: source.file-name;
                                             color: #0f172a;
                                             font-size: 13px;
                                             font-weight: 650;
                                             overflow: elide;
                                         }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 7px;
+                                        Rectangle { min-width: 35px; max-width: 35px; background: transparent; }
                                         Text {
+                                            horizontal-stretch: 1;
                                             text: source.sheet-name + "  ·  " + source.detail;
                                             color: #64748b;
                                             font-size: 11px;
                                             overflow: elide;
+                                            vertical-alignment: center;
                                         }
-                                    }
-                                    VerticalLayout {
-                                        width: 96px;
-                                        spacing: 2px;
                                         Text {
                                             text: "表头行";
-                                            color: #64748b;
-                                            font-size: 10px;
-                                            horizontal-alignment: center;
+                                            color: #475569;
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
                                         }
                                         SpinBox {
+                                            min-width: 88px;
+                                            max-width: 88px;
+                                            min-height: 28px;
+                                            max-height: 28px;
                                             value: source.header-row;
                                             minimum: 1;
                                             maximum: 100000;
@@ -385,21 +448,25 @@ export component AppWindow inherits Window {
                             font-size: 11px;
                         }
                         HorizontalLayout {
-                            spacing: 20px;
-                            CheckBox {
-                                text: "追加来源文件列";
+                            spacing: 8px;
+                            OptionToggle {
+                                horizontal-stretch: 1;
+                                title: "记录来源文件";
+                                description: "输出中增加文件名列";
                                 checked: root.include-source-file;
-                                toggled => {
-                                    root.include-source-file = self.checked;
-                                    root.include-source-file-changed(self.checked);
+                                toggled(value) => {
+                                    root.include-source-file = value;
+                                    root.include-source-file-changed(value);
                                 }
                             }
-                            CheckBox {
-                                text: "追加来源工作表列";
+                            OptionToggle {
+                                horizontal-stretch: 1;
+                                title: "记录来源工作表";
+                                description: "输出中增加 Sheet 名列";
                                 checked: root.include-source-sheet;
-                                toggled => {
-                                    root.include-source-sheet = self.checked;
-                                    root.include-source-sheet-changed(self.checked);
+                                toggled(value) => {
+                                    root.include-source-sheet = value;
+                                    root.include-source-sheet-changed(value);
                                 }
                             }
                         }
@@ -612,6 +679,47 @@ export component AppWindow inherits Window {
                         text: "在文件夹中显示";
                         clicked => { root.reveal-output(); }
                     }
+                }
+            }
+        }
+    }
+
+    if root.show-about: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #0f172a99;
+        TouchArea { }
+        Rectangle {
+            width: 380px;
+            height: 250px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: #cbd5e1;
+            background: #ffffff;
+            VerticalLayout {
+                padding: 22px;
+                spacing: 10px;
+                Text {
+                    text: "关于 SheetForge";
+                    color: #0f172a;
+                    font-size: 20px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "SheetForge v0.2.1  ·  本地 Excel / CSV 合并工具";
+                    color: #64748b;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                }
+                AboutSlint { vertical-stretch: 1; }
+                ActionButton {
+                    height: 36px;
+                    text: "关闭";
+                    primary: true;
+                    clicked => { root.show-about = false; }
                 }
             }
         }
