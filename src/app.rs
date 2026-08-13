@@ -337,8 +337,19 @@ fn sync_ui(ui: &AppWindow, app: &MergeApp) {
     ui.set_common_fields_label((if app.hide_common_mappings { format!("显示共有字段（已隐藏 {common_count}）") } else { format!("隐藏共有字段（{common_count}）") }).into());
 
     let plan = build_output_plan(&app.sources, &app.options);
-    ui.set_output_columns(ModelRc::new(VecModel::from(plan.headers.iter().enumerate().map(|(index, name)| ColumnRow { column_index: index as i32, name: name.clone().into() }).collect::<Vec<_>>()));
-    ui.set_preview_rows(ModelRc::new(VecModel::from(preview_rows(app.preview.as_ref()))));
+    let output_columns = plan
+        .headers
+        .iter()
+        .enumerate()
+        .map(|(index, name)| ColumnRow {
+            column_index: index as i32,
+            name: name.clone().into(),
+        })
+        .collect::<Vec<_>>();
+    ui.set_output_columns(ModelRc::new(VecModel::from(output_columns)));
+    ui.set_preview_rows(ModelRc::new(VecModel::from(preview_rows(
+        app.preview.as_ref(),
+    ))));
     ui.set_preview_title(app.preview_title.clone().into());
     let check_rows = app
         .check_issues
