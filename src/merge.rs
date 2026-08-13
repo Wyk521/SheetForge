@@ -499,7 +499,7 @@ fn fill_empty(existing: &mut [CellValue], incoming: &[CellValue]) {
 }
 
 fn send_progress(current: u64, total: u64, label: String, tx: &Sender<MergeEvent>) {
-    if current % 1_000 == 0 || current == total {
+    if current.is_multiple_of(1_000) || current == total {
         let _ = tx.send(MergeEvent::Progress {
             current,
             total,

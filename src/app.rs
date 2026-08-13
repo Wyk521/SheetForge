@@ -432,6 +432,20 @@ impl MergeApp {
 pub fn run() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
     let state = Rc::new(RefCell::new(MergeApp::default()));
+    {
+        let app = state.borrow();
+        ui.window().set_size(slint::PhysicalSize::new(
+            app.settings.window_width.max(1000.0) as u32,
+            app.settings.window_height.max(700.0) as u32,
+        ));
+        if app.settings.window_x != i32::MIN && app.settings.window_y != i32::MIN {
+            ui.window().set_position(slint::PhysicalPosition::new(
+                app.settings.window_x,
+                app.settings.window_y,
+            ));
+        }
+        ui.window().set_maximized(app.settings.window_maximized);
+    }
     sync_ui(&ui, &state.borrow());
     install_callbacks(&ui, state.clone());
     let weak = ui.as_weak();
@@ -445,7 +459,20 @@ pub fn run() -> Result<(), slint::PlatformError> {
             sync_ui(&ui, &poll_state.borrow());
         }
     });
-    ui.run()
+    let result = ui.run();
+    let mut app = state.borrow_mut();
+    let maximized = ui.window().is_maximized();
+    if !maximized {
+        let size = ui.window().size();
+        app.settings.window_width = size.width as f32;
+        app.settings.window_height = size.height as f32;
+    }
+    let position = ui.window().position();
+    app.settings.window_x = position.x;
+    app.settings.window_y = position.y;
+    app.settings.window_maximized = maximized;
+    let _ = save_settings(&app.settings);
+    result
 }
 
 fn install_callbacks(ui: &AppWindow, state: Rc<RefCell<MergeApp>>) {
@@ -1168,7 +1195,7 @@ fn format_number(value: u64) -> String {
     let text = value.to_string();
     let mut output = String::with_capacity(text.len() + text.len() / 3);
     for (index, ch) in text.chars().enumerate() {
-        if index > 0 && (text.len() - index) % 3 == 0 {
+        if index > 0 && (text.len() - index).is_multiple_of(3) {
             output.push(',');
         }
         output.push(ch);

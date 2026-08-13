@@ -180,13 +180,22 @@ pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIss
                 ),
             ));
         }
+        if let SourceKind::Csv { delimiter } = table.kind {
+            if let Err(error) = validate_csv(&table.path, delimiter, 10_000) {
+                issues.push(issue(
+                    IssueLevel::Error,
+                    "CSV 行格式异常",
+                    &format!("{}：{error:#}", table.display_name()),
+                ));
+            }
+        }
     }
     let mut similar = Vec::new();
     let names = union.iter().collect::<Vec<_>>();
     for left in 0..names.len() {
         for right in left + 1..names.len() {
             let score = strsim::normalized_levenshtein(names[left], names[right]);
-            if score >= 0.72 && score < 1.0 {
+            if (0.72..1.0).contains(&score) {
                 similar.push(format!("{} ↔ {}", names[left], names[right]));
             }
             if similar.len() >= 8 {

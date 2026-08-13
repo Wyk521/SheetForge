@@ -30,8 +30,9 @@ pub enum SourceKind {
     Workbook,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransformOp {
+    #[default]
     None,
     Trim,
     Uppercase,
@@ -49,16 +50,18 @@ impl TransformOp {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AggregateOp {
+    #[default]
     First,
     Sum,
     UniqueJoin,
     TextJoin,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JoinKind {
+    #[default]
     Left,
     Inner,
     Full,
@@ -149,24 +152,6 @@ impl Default for MergeOptions {
             filter_text: String::new(),
             filter_exclude: false,
         }
-    }
-}
-
-impl Default for TransformOp {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-impl Default for AggregateOp {
-    fn default() -> Self {
-        Self::First
-    }
-}
-
-impl Default for JoinKind {
-    fn default() -> Self {
-        Self::Left
     }
 }
 

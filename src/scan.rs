@@ -435,7 +435,7 @@ pub fn detect_delimiter(path: &Path) -> Result<u8> {
     let read = file.read(&mut sample)?;
     sample.truncate(read);
     let mut best = (i64::MIN, b',');
-    for delimiter in [b',', b'\t', b';', b'|'] {
+    for &delimiter in b",\t;|" {
         let widths = ReaderBuilder::new()
             .has_headers(false)
             .flexible(true)
