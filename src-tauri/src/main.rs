@@ -2,6 +2,8 @@
 
 mod commands;
 mod config;
+#[cfg(test)]
+mod engine_tests;
 mod inspect;
 mod merge;
 mod model;
@@ -11,9 +13,9 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(commands::AppState {
+        .manage(std::sync::Mutex::new(commands::AppState {
             cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        })
+        }))
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::get_plan,

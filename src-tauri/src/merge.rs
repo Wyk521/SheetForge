@@ -121,7 +121,7 @@ pub fn spawn_preflight(
     });
 }
 
-fn merge_tables(
+pub(crate) fn merge_tables(
     tables: &[SourceTable],
     options: &MergeOptions,
     output: &Path,
