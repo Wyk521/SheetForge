@@ -8,6 +8,7 @@ import {
   defaultOptions,
   type AppSettings,
   type CheckIssue,
+  type ColumnMapping,
   type MergeFinished,
   type MergeOptions,
   type MergeProgress,
@@ -19,6 +20,7 @@ import {
   type SourceTable,
   type TableReloaded,
   type TablesReloaded,
+  type TransformOp,
   type UpdateResult,
 } from "../types";
 
@@ -31,6 +33,16 @@ const MODE_LABELS: Record<string, string> = {
   Consolidate: "按键汇总",
   Join: "横向关联",
 };
+
+/** 「按字段改表」视图中的一组同名字段（按原始来源表头分组） */
+export interface FieldGroup {
+  key: string;
+  count: number;
+  tables: string[];
+  uniformTarget: string | null;
+  uniformEnabled: boolean | null;
+  uniformTransform: string | null;
+}
 
 export const useMergeStore = defineStore("merge", () => {
   // ---- 状态（原 MergeApp 的状态集） ----
@@ -55,6 +67,8 @@ export const useMergeStore = defineStore("merge", () => {
   const mismatchOnly = ref(false);
   const sourceSearch = ref("");
   const mappingSearch = ref("");
+  const mappingScope = ref<"table" | "field">("table");
+  const onlyMultiField = ref(false);
   const planHeaders = ref<string[]>([]);
   const planCommonKeys = ref<Set<string>>(new Set());
   const scanAppend = ref(false);
@@ -76,6 +90,38 @@ export const useMergeStore = defineStore("merge", () => {
   const canStart = computed(
     () => !busy.value && sources.value.filter((t) => t.enabled).length > 0 && planHeaders.value.length > 0
   );
+
+  const fieldGroups = computed<FieldGroup[]>(() => {
+    const byKey = new Map<
+      string,
+      { key: string; tables: string[]; targets: Set<string>; enables: Set<boolean>; transforms: Set<string> }
+    >();
+    for (const table of sources.value) {
+      if (!table.enabled) continue;
+      for (const mapping of table.mappings) {
+        const key = mapping.source_name.trim();
+        let group = byKey.get(key);
+        if (!group) {
+          group = { key, tables: [], targets: new Set(), enables: new Set(), transforms: new Set() };
+          byKey.set(key, group);
+        }
+        group.tables.push(displayName(table));
+        group.targets.add(mapping.target_name.trim());
+        group.enables.add(mapping.enabled);
+        group.transforms.add(mapping.transform);
+      }
+    }
+    return [...byKey.values()]
+      .map((g) => ({
+        key: g.key,
+        count: g.tables.length,
+        tables: g.tables,
+        uniformTarget: g.targets.size === 1 ? [...g.targets][0] : null,
+        uniformEnabled: g.enables.size === 1 ? [...g.enables][0] : null,
+        uniformTransform: g.transforms.size === 1 ? [...g.transforms][0] : null,
+      }))
+      .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key, "zh"));
+  });
 
   // ---- 工具 ----
   const formatNumber = (value: number) => value.toLocaleString("en-US");
@@ -346,6 +392,46 @@ export const useMergeStore = defineStore("merge", () => {
         if (target) mapping.target_name = target;
       }
     }
+    void refreshPlan();
+  }
+
+  // ---- 按字段批量操作（作用于所有启用表中同名来源字段的映射） ----
+  function forEachFieldMapping(key: string, fn: (mapping: ColumnMapping) => void) {
+    for (const table of sources.value) {
+      if (!table.enabled) continue;
+      for (const mapping of table.mappings) {
+        if (mapping.source_name.trim() === key) fn(mapping);
+      }
+    }
+  }
+
+  function setFieldTarget(key: string, target: string) {
+    forEachFieldMapping(key, (mapping) => {
+      mapping.target_name = target.trim();
+    });
+    void refreshPlan();
+  }
+
+  function setFieldEnabled(key: string, enabled: boolean) {
+    forEachFieldMapping(key, (mapping) => {
+      mapping.enabled = enabled;
+    });
+    void refreshPlan();
+  }
+
+  function setFieldTransform(key: string, transform: TransformOp) {
+    forEachFieldMapping(key, (mapping) => {
+      mapping.transform = transform;
+    });
+    void refreshPlan();
+  }
+
+  function resetField(key: string) {
+    forEachFieldMapping(key, (mapping) => {
+      mapping.target_name = mapping.source_name;
+      mapping.enabled = true;
+      mapping.transform = "None";
+    });
     void refreshPlan();
   }
 
@@ -622,15 +708,17 @@ export const useMergeStore = defineStore("merge", () => {
     sources, options, outputPath, inputLabel, phase, progress, progressLabel, warnings,
     checkIssues, checkRan, preview, previewTitle, settings, updateText, updateUrl,
     collapsedGroups, selectedMappingTable, hideCommonMappings, mismatchOnly,
-    sourceSearch, mappingSearch, planHeaders, planCommonKeys, activePage, showAbout,
+    sourceSearch, mappingSearch, mappingScope, onlyMultiField, planHeaders, planCommonKeys,
+    activePage, showAbout,
     // getters
-    busy, hasSources, enabledIndices, rowsMetric, sheetsMetric, canStart, formatNumber,
+    busy, hasSources, enabledIndices, rowsMetric, sheetsMetric, canStart, fieldGroups, formatNumber,
     // actions
     chooseFolder, chooseFiles, scanFolder, scanFiles, clearSources,
     toggleSourceEnabled, selectAll, toggleGroup, setGroupEnabled, removeGroup, removeSource,
     applyGroupHeader, reloadTable,
     setMode, setAdvanced, moveOutputColumn, selectedTable, setMapping, setMappingOperation,
-    resetMapping, applySuggestions, toggleCommonFields: () => (hideCommonMappings.value = !hideCommonMappings.value),
+    resetMapping, applySuggestions,
+    setFieldTarget, setFieldEnabled, setFieldTransform, resetField, toggleCommonFields: () => (hideCommonMappings.value = !hideCommonMappings.value),
     setMismatchOnly: (v: boolean) => (mismatchOnly.value = v),
     showSourcePreview, showMergedPreview, runPreflight, startMerge, cancelMerge,
     saveScheme, openScheme, openSchemeByPath, checkUpdate, loadState, initEvents, revealOutput, openLog, refreshPlan,

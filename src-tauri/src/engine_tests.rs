@@ -411,3 +411,53 @@ fn union_merges_intersection_and_manual() {
     assert_eq!(manual.len(), 3, "表头 + 2 行数据");
     assert!(manual.iter().any(|row| row[0] == "张三"));
 }
+
+#[test]
+fn batch_rename_same_field_across_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = scan_csv(&dir, "a.csv", "姓名,金额\n张三,100\n");
+    let b = scan_csv(&dir, "b.csv", "姓名,金额\n李四,200\n");
+    let c = scan_csv(&dir, "c.csv", "姓名,金额,备注\n王五,300,ok\n");
+    let d = scan_csv(&dir, "d.csv", "姓名\n赵六\n");
+
+    // 模拟「按字段改表」的批量动作：把所有表中“金额”这个来源字段全部映射到“合同金额”
+    // （不含该字段的表不受影响）
+    let tables: Vec<SourceTable> = vec![a, b, c, d]
+        .into_iter()
+        .map(|mut table| {
+            for mapping in &mut table.mappings {
+                if mapping.source_name == "金额" {
+                    mapping.target_name = "合同金额".to_owned();
+                }
+            }
+            table
+        })
+        .collect();
+
+    let rows = merge_and_read(
+        tables,
+        MergeOptions {
+            mode: MergeMode::Manual,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        rows[0],
+        vec!["姓名", "合同金额", "备注"],
+        "同名来源字段应统一改名"
+    );
+    let data: Vec<Vec<String>> = rows[1..].to_vec();
+    let amount_col = rows[0].iter().position(|h| h == "合同金额").unwrap();
+    assert!(data
+        .iter()
+        .any(|row| row[0] == "张三" && row.get(amount_col).map(String::as_str) == Some("100")));
+    assert!(data
+        .iter()
+        .any(|row| row[0] == "李四" && row.get(amount_col).map(String::as_str) == Some("200")));
+    assert!(data
+        .iter()
+        .any(|row| row[0] == "王五" && row.get(amount_col).map(String::as_str) == Some("300")));
+    // 不含“金额”字段的表不改动、也不补空列
+    let zhao = data.iter().find(|row| row[0] == "赵六").unwrap();
+    assert_eq!(zhao.get(amount_col).map(String::as_str).unwrap_or(""), "");
+}

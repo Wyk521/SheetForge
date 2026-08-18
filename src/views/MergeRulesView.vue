@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useMergeStore } from "../stores/merge";
+import FieldBatchView from "../components/FieldBatchView.vue";
 import type { MergeMode } from "../types";
 
 const store = useMergeStore();
@@ -215,6 +216,11 @@ function updateTableSelection(index: number) {
           </div>
         </el-card>
         <el-card v-else shadow="never">
+          <el-radio-group v-model="store.mappingScope" size="small" style="margin-bottom: 10px">
+            <el-radio-button value="table">按表改字段</el-radio-button>
+            <el-radio-button value="field">按字段改表</el-radio-button>
+          </el-radio-group>
+          <template v-if="store.mappingScope === 'table'">
           <div style="display: flex; gap: 8px; margin-bottom: 10px">
             <el-select
               :model-value="store.selectedMappingTable"
@@ -303,6 +309,8 @@ function updateTableSelection(index: number) {
               </template>
             </el-table-column>
           </el-table>
+          </template>
+          <FieldBatchView v-else />
         </el-card>
       </div>
     </div>

@@ -9,3 +9,5 @@
 *.tsv
 !tests/fixtures/*.csv
 .mimosa/
+
+.zcode/
