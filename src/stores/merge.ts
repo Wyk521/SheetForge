@@ -537,7 +537,8 @@ export const useMergeStore = defineStore("merge", () => {
       multiple: false,
       filters: [{ name: "表格合并方案", extensions: ["json"] }],
     });
-    if (!path) await openSchemeByPath(String(path));
+    if (!path) return;
+    await openSchemeByPath(String(path));
   }
 
   async function openSchemeByPath(path: string) {
