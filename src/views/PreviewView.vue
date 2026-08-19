@@ -117,6 +117,18 @@ async function exportReport() {
         <span style="font-size: 11px; color: var(--sf-text-muted)">
           按当前规则显示前 30 行；正式导出仍采用流式处理
         </span>
+        <el-tag
+          v-if="store.options.mode === 'Consolidate' || store.options.mode === 'Join'"
+          type="warning"
+          size="small"
+          effect="plain"
+        >
+          {{
+            store.options.mode === "Consolidate"
+              ? "预览未体现按键汇总结果，仅供列结构参考"
+              : "预览未体现关联结果，仅供列结构参考"
+          }}
+        </el-tag>
         <el-button style="margin-left: auto" @click="store.showMergedPreview()">刷新预览</el-button>
       </div>
       <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px">{{ store.previewTitle }}</div>

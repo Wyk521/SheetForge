@@ -523,8 +523,24 @@ fn aggregate_rows(
                 }
             }
             AggregateOp::Sum => {
-                let sum = current.as_number().unwrap_or(0.0) + other.as_number().unwrap_or(0.0);
-                *current = CellValue::Number(sum);
+                // 整数用 i128 累加避免金额/大数在浮点累加中丢精度；
+                // 结果在 f64 安全范围内输出为数值(Excel 可参与计算)，
+                // 超出 2^53 才降级为文本以保住每一位精度。
+                if let (Ok(current_int), Ok(other_int)) = (
+                    current.as_text().trim().parse::<i128>(),
+                    other.as_text().trim().parse::<i128>(),
+                ) {
+                    let total = current_int + other_int;
+                    let limit = 1i128 << 53;
+                    if total >= -limit && total <= limit {
+                        *current = CellValue::Number(total as f64);
+                    } else {
+                        *current = CellValue::Text(total.to_string());
+                    }
+                } else {
+                    let sum = current.as_number().unwrap_or(0.0) + other.as_number().unwrap_or(0.0);
+                    *current = CellValue::Number(sum);
+                }
             }
             AggregateOp::UniqueJoin => {
                 let mut values = current

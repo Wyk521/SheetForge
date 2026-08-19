@@ -249,6 +249,56 @@ fn consolidate_sums_text_numbers() {
 }
 
 #[test]
+fn consolidate_large_int_sum_keeps_exact_precision() {
+    // 刁钻场景：2^53 + 1，浮点累加会丢一个单位，整数累加须精确得到 9007199254740993
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(
+        &dir,
+        "big.csv",
+        "城市,金额\n北京,9007199254740992\n北京,1\n",
+    );
+    let mut options = MergeOptions {
+        mode: MergeMode::Consolidate,
+        key_columns: vec!["城市".to_owned()],
+        ..Default::default()
+    };
+    options.output_order = vec!["城市".to_owned(), "金额".to_owned()];
+    let mut table = table;
+    for mapping in &mut table.mappings {
+        if mapping.source_name == "金额" {
+            mapping.aggregate = AggregateOp::Sum;
+        }
+    }
+    let rows = merge_and_read(vec![table], options);
+    assert_eq!(
+        rows[1],
+        vec!["北京".to_owned(), "9007199254740993".to_owned()],
+        "超大整数求和必须精确不丢位: {rows:?}"
+    );
+}
+
+#[test]
+fn consolidate_normal_integer_sum_stays_numeric() {
+    // 常规整数结果仍是数值单元格（Excel 可参与计算），不因精度保护变文本
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(&dir, "n.csv", "城市,金额\n北京,10\n北京,20\n");
+    let mut options = MergeOptions {
+        mode: MergeMode::Consolidate,
+        key_columns: vec!["城市".to_owned()],
+        ..Default::default()
+    };
+    options.output_order = vec!["城市".to_owned(), "金额".to_owned()];
+    let mut table = table;
+    for mapping in &mut table.mappings {
+        if mapping.source_name == "金额" {
+            mapping.aggregate = AggregateOp::Sum;
+        }
+    }
+    let rows = merge_and_read(vec![table], options);
+    assert_eq!(rows[1], vec!["北京".to_owned(), "30".to_owned()]);
+}
+
+#[test]
 fn dedup_and_filter_work_together() {
     let dir = tempfile::tempdir().unwrap();
     let table = scan_csv(

@@ -618,7 +618,12 @@ export const useMergeStore = defineStore("merge", () => {
         checkIssues.value = [];
         checkRan.value = false;
         phase.value = "ready";
-        progressLabel.value = `已统一刷新 ${e.payload.tables.length} 个数据表的表头`;
+        const failed = e.payload.failures ?? 0;
+        progressLabel.value =
+          failed > 0
+            ? `已刷新 ${e.payload.tables.length} 个数据表，${failed} 个失败`
+            : `已统一刷新 ${e.payload.tables.length} 个数据表的表头`;
+        if (failed > 0) ElMessage.warning(`${failed} 个数据表刷新失败，其余已应用`);
         void refreshPlan();
       }),
       await listen<{ index: number; message: string }>("table-reload-failed", (e) => {

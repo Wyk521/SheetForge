@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { ElMessage } from "element-plus";
 import TopBar from "./components/TopBar.vue";
 import TitleBar from "./components/TitleBar.vue";
 import BottomBar from "./components/BottomBar.vue";
@@ -13,6 +14,9 @@ import { useMergeStore } from "./stores/merge";
 const store = useMergeStore();
 
 function onKeyDown(event: KeyboardEvent) {
+  // 在输入框/文本域/可编辑元素里按快捷键属于正常编辑操作，不触发全局快捷键
+  const target = event.target as HTMLElement | null;
+  if (target?.closest?.("input, textarea, [contenteditable='true'], .el-select")) return;
   if (event.ctrlKey && event.key.toLowerCase() === "o") {
     event.preventDefault();
     void store.chooseFiles();
@@ -45,6 +49,11 @@ onMounted(async () => {
   window.addEventListener("contextmenu", onContextMenu);
   unlistenDrop = await getCurrentWebviewWindow().onDragDropEvent((event) => {
     if (event.payload.type === "drop") {
+      // 扫描/合并进行中不接受拖放，避免并发覆盖列表
+      if (store.busy) {
+        ElMessage.warning("正在处理中，请稍候再拖入文件");
+        return;
+      }
       void store.scanFiles(event.payload.paths);
     }
   });

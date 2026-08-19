@@ -88,6 +88,7 @@ export interface TableReloaded {
 
 export interface TablesReloaded {
   tables: TableReloaded[];
+  failures: number;
 }
 
 export interface MergeProgress {
