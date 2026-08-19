@@ -299,6 +299,35 @@ fn consolidate_normal_integer_sum_stays_numeric() {
 }
 
 #[test]
+fn consolidate_wide_integer_sum_stays_text_not_scientific() {
+    // 刁钻场景：求和结果达 15 位时，绝不能显示成科学计数法，须保持完整数字
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(
+        &dir,
+        "w.csv",
+        "城市,金额\n北京,70000000000000\n北京,70000000000000\n",
+    );
+    let mut options = MergeOptions {
+        mode: MergeMode::Consolidate,
+        key_columns: vec!["城市".to_owned()],
+        ..Default::default()
+    };
+    options.output_order = vec!["城市".to_owned(), "金额".to_owned()];
+    let mut table = table;
+    for mapping in &mut table.mappings {
+        if mapping.source_name == "金额" {
+            mapping.aggregate = AggregateOp::Sum;
+        }
+    }
+    let rows = merge_and_read(vec![table], options);
+    assert_eq!(
+        rows[1],
+        vec!["北京".to_owned(), "140000000000000".to_owned()],
+        "15 位求和结果必须是完整数字文本，不得出现科学计数法: {rows:?}"
+    );
+}
+
+#[test]
 fn dedup_and_filter_work_together() {
     let dir = tempfile::tempdir().unwrap();
     let table = scan_csv(

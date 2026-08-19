@@ -531,8 +531,9 @@ fn aggregate_rows(
                     other.as_text().trim().parse::<i128>(),
                 ) {
                     let total = current_int + other_int;
-                    let limit = 1i128 << 53;
-                    if total >= -limit && total <= limit {
+                    // Excel 对超过 15 位的整数会强制科学计数法显示；
+                    // 14 位以内保持数值(可参与计算)，超过则降级为文本保原样，杜绝科学计数法。
+                    if (total as f64).abs() < 1e14 {
                         *current = CellValue::Number(total as f64);
                     } else {
                         *current = CellValue::Text(total.to_string());
