@@ -1,11 +1,43 @@
+/* ============================================================
+   SheetForge 现代主题
+   中性石墨头部 / 冷调浅灰背景 / 圆角卡片 / 单一强调色（无渐变）
+   ============================================================ */
+
 :root {
-  --sf-bg-page: #f5f7fa;
+  /* 单一强调色（克制使用，无渐变） */
+  --sf-primary: #4f6ef7;
+  --sf-primary-dark: #3d56d6;
+
+  /* 头部（标题栏 + 导航一体）—— 中性石墨色，非黑非渐变 */
+  --sf-header-bg: #262d3d;
+  --sf-header-text: #ffffff;
+
+  /* 内容背景（冷调浅灰，非纯白） */
+  --sf-bg-page: #f3f5f9;
   --sf-bg-card: #ffffff;
-  --sf-border: #e4e7ed;
-  --sf-text: #303133;
-  --sf-text-secondary: #606266;
-  --sf-text-muted: #909399;
-  --sf-primary: #409eff;
+
+  /* 边框 / 文字 */
+  --sf-border: #e2e6ef;
+  --sf-border-soft: #eef1f8;
+  --sf-text: #2b2f3a;
+  --sf-text-secondary: #5b6270;
+  --sf-text-muted: #8b93a5;
+
+  /* 卡片阴影 / 圆角 */
+  --sf-shadow-card: 0 4px 16px rgba(40, 50, 90, 0.07);
+  --sf-radius-card: 12px;
+  --sf-radius-lg: 10px;
+  --sf-radius-md: 8px;
+
+  /* 覆盖 Element Plus 主色 */
+  --el-color-primary: #4f6ef7;
+  --el-color-primary-light-3: #7e95f9;
+  --el-color-primary-light-5: #a5b6fb;
+  --el-color-primary-light-7: #ccd7fd;
+  --el-color-primary-light-8: #dfe6fe;
+  --el-color-primary-light-9: #eef2fe;
+  --el-color-primary-dark-2: #3d56d6;
+  --el-border-radius-base: 6px;
 }
 
 * {
@@ -35,62 +67,132 @@ body,
 .app-content {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
-  background: var(--sf-bg-page);
+  padding: 18px 22px;
+  background: transparent;
 }
 
-/* 顶栏 */
-.sf-topbar {
+/* ============================================================
+   头部（标题栏 + 导航）—— 中性石墨色
+   ============================================================ */
+.sf-titlebar {
+  flex-shrink: 0;
+  height: 34px;
+  display: flex;
+  align-items: stretch;
+  background: var(--sf-header-bg);
+  color: var(--sf-header-text);
+  user-select: none;
+}
+
+.sf-titlebar-drag {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 18px;
-  height: 60px;
-  padding: 0 20px;
-  background: var(--sf-bg-card);
-  border-bottom: 1px solid var(--sf-border);
-  flex-shrink: 0;
+  padding-left: 14px;
+  cursor: default;
 }
 
-.sf-logo {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #409eff, #337ecc);
-  color: #fff;
+.sf-titlebar-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  letter-spacing: 0.3px;
+}
+
+.sf-titlebar-controls {
+  display: flex;
+  align-items: stretch;
+}
+
+.sf-win-btn {
+  width: 46px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 17px;
-  font-weight: 800;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s, color 0.12s;
+}
+
+.sf-win-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.sf-win-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+/* 顶栏（导航）—— 与标题栏同色，视觉连成一条头部 */
+.sf-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 58px;
+  padding: 0 20px;
+  background: var(--sf-header-bg);
   flex-shrink: 0;
 }
 
-.sf-brand b {
-  font-size: 15px;
-  display: block;
-  line-height: 1.2;
+/* 导航菜单在深色头部上的样式 */
+.sf-topbar .sf-nav {
+  border-bottom: none;
+  margin-left: 4px;
+  background: transparent;
+  --el-menu-bg-color: transparent;
+  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.12);
+  --el-menu-active-color: #ffffff;
+  --el-menu-text-color: rgba(255, 255, 255, 0.78);
 }
 
-.sf-brand small {
-  font-size: 11px;
-  color: var(--sf-text-muted);
+.sf-topbar .sf-nav .el-menu-item {
+  height: 46px;
+  line-height: 46px;
+  margin: 4px 2px 0;
+  border-radius: 6px 6px 0 0;
+  font-weight: 500;
+  border-bottom: none !important;
+  transition: background 0.15s, color 0.15s;
 }
 
-/* 底部栏 */
+.sf-topbar .sf-nav .el-menu-item:hover,
+.sf-topbar .sf-nav .el-menu-item.is-active {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* 顶栏按钮（保存方案 / 打开方案 / 关于）在深色头部上白字 */
+.sf-topbar .el-button.is-text {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.sf-topbar .el-button.is-text:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* 底栏 */
 .sf-bottombar {
   flex-shrink: 0;
-  background: var(--sf-bg-card);
+  background: rgba(255, 255, 255, 0.96);
   border-top: 1px solid var(--sf-border);
   padding: 12px 20px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  box-shadow: 0 -4px 16px rgba(40, 50, 90, 0.05);
 }
 
 .sf-metric {
-  background: #f5f7fa;
+  background: #f4f6fc;
   border: 1px solid var(--sf-border);
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 6px 14px;
   min-width: 104px;
   text-align: center;
@@ -105,6 +207,7 @@ body,
 .sf-metric b {
   font-size: 15px;
   font-variant-numeric: tabular-nums;
+  color: var(--sf-text);
 }
 
 .sf-status {
@@ -120,12 +223,12 @@ body,
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #67c23a;
+  background: #34c759;
   flex-shrink: 0;
 }
 
 .sf-status.error .dot {
-  background: #f56c6c;
+  background: #ff3b30;
 }
 
 /* 分组行 / 工作表行 */
@@ -134,21 +237,24 @@ body,
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  background: #f5f7fa;
-  border-bottom: 1px solid var(--sf-border);
+  background: #f4f6fc;
+  border: 1px solid var(--sf-border-soft);
+  border-radius: 8px;
+  margin: 4px 2px;
 }
 
 .sf-sheet-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 14px 8px 24px;
-  border-bottom: 1px solid #f0f2f5;
+  padding: 9px 14px 9px 26px;
+  border-bottom: 1px solid var(--sf-border-soft);
   transition: background 0.12s;
+  border-radius: 6px;
 }
 
 .sf-sheet-row:hover {
-  background: #f5f7fa;
+  background: #f7f9ff;
 }
 
 .sf-row-name {
@@ -164,4 +270,26 @@ body,
 /* 数值等宽 */
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* 品牌 logo（关于对话框等处），单色圆角块 */
+.sf-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--sf-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+/* 卡片 / 面板统一样式增强 */
+.el-card.is-never-shadow {
+  border-radius: var(--sf-radius-card);
+  border: 1px solid var(--sf-border);
+  box-shadow: var(--sf-shadow-card);
 }
