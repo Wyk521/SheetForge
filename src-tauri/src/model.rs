@@ -203,6 +203,15 @@ pub fn build_output_plan(tables: &[SourceTable], options: &MergeOptions) -> Outp
         MergeMode::Manual => manual_headers(&enabled),
     };
 
+    // 来源列先并入列集，使其能参与 output_order 排序（可排在任意位置），
+    // 而不是固定追加在末尾。
+    if options.include_source_file {
+        push_unique_metadata(&mut headers, "来源文件");
+    }
+    if options.include_source_sheet {
+        push_unique_metadata(&mut headers, "来源工作表");
+    }
+
     if !options.output_order.is_empty() {
         let positions: HashMap<String, usize> = options
             .output_order
@@ -218,12 +227,23 @@ pub fn build_output_plan(tables: &[SourceTable], options: &MergeOptions) -> Outp
         });
     }
 
+    // 排序后重新定位来源列的实际位置
     let source_file_column = options
         .include_source_file
-        .then(|| push_unique_metadata(&mut headers, "来源文件"));
+        .then(|| {
+            headers
+                .iter()
+                .position(|name| header_key(name) == header_key("来源文件"))
+                .unwrap_or(0)
+        });
     let source_sheet_column = options
         .include_source_sheet
-        .then(|| push_unique_metadata(&mut headers, "来源工作表"));
+        .then(|| {
+            headers
+                .iter()
+                .position(|name| header_key(name) == header_key("来源工作表"))
+                .unwrap_or(0)
+        });
 
     OutputPlan {
         headers,
