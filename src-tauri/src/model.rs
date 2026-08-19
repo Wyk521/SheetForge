@@ -445,6 +445,49 @@ mod tests {
     }
 
     #[test]
+    fn source_sheet_column_follows_user_output_order() {
+        // 用户场景：开启「记录来源工作表」后，把「来源工作表」列拖到输出顺序最前面
+        let tables = vec![table(&["姓名", "年龄"]), table(&["姓名", "城市"])];
+        let plan = build_output_plan(
+            &tables,
+            &MergeOptions {
+                mode: MergeMode::Union,
+                include_source_sheet: true,
+                output_order: vec![
+                    "来源工作表".to_owned(),
+                    "姓名".to_owned(),
+                    "年龄".to_owned(),
+                    "城市".to_owned(),
+                ],
+                ..Default::default()
+            },
+        );
+        assert_eq!(plan.headers, vec!["来源工作表", "姓名", "年龄", "城市"]);
+        assert_eq!(plan.source_sheet_column, Some(0));
+    }
+
+    #[test]
+    fn source_columns_can_sit_in_the_middle_of_output() {
+        // 用户场景：把「来源工作表」拖到「姓名」和「年龄」之间
+        let tables = vec![table(&["姓名", "年龄"])];
+        let plan = build_output_plan(
+            &tables,
+            &MergeOptions {
+                mode: MergeMode::Union,
+                include_source_sheet: true,
+                output_order: vec![
+                    "姓名".to_owned(),
+                    "来源工作表".to_owned(),
+                    "年龄".to_owned(),
+                ],
+                ..Default::default()
+            },
+        );
+        assert_eq!(plan.headers, vec!["姓名", "来源工作表", "年龄"]);
+        assert_eq!(plan.source_sheet_column, Some(1));
+    }
+
+    #[test]
     fn merge_options_round_trip_as_scheme_data() {
         let options = MergeOptions {
             mode: MergeMode::Join,
