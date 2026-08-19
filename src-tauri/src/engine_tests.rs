@@ -330,6 +330,37 @@ fn transforms_and_source_columns() {
 }
 
 #[test]
+fn source_sheet_column_in_the_middle_keeps_data_aligned() {
+    // 刁钻场景：用户把「来源工作表」拖到中间（姓名和城市之间）再合并，
+    // 不仅表头顺序要正确，每一行的数据也必须落在正确的列上，不能错位。
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(&dir, "t.csv", "姓名,城市\n张三,北京\n");
+    let rows = merge_and_read(
+        vec![table],
+        MergeOptions {
+            mode: MergeMode::Union,
+            include_source_sheet: true,
+            output_order: vec![
+                "姓名".to_owned(),
+                "来源工作表".to_owned(),
+                "城市".to_owned(),
+            ],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        rows[0],
+        vec!["姓名", "来源工作表", "城市"],
+        "表头顺序应遵循用户拖拽后的位置"
+    );
+    assert_eq!(
+        rows[1],
+        vec!["张三", "CSV", "北京"],
+        "来源列在中间时，前后列的数据不能错位"
+    );
+}
+
+#[test]
 fn workbook_multiple_sheets_all_merge() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("two.xlsx");
