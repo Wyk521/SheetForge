@@ -228,22 +228,18 @@ pub fn build_output_plan(tables: &[SourceTable], options: &MergeOptions) -> Outp
     }
 
     // 排序后重新定位来源列的实际位置
-    let source_file_column = options
-        .include_source_file
-        .then(|| {
-            headers
-                .iter()
-                .position(|name| header_key(name) == header_key("来源文件"))
-                .unwrap_or(0)
-        });
-    let source_sheet_column = options
-        .include_source_sheet
-        .then(|| {
-            headers
-                .iter()
-                .position(|name| header_key(name) == header_key("来源工作表"))
-                .unwrap_or(0)
-        });
+    let source_file_column = options.include_source_file.then(|| {
+        headers
+            .iter()
+            .position(|name| header_key(name) == header_key("来源文件"))
+            .unwrap_or(0)
+    });
+    let source_sheet_column = options.include_source_sheet.then(|| {
+        headers
+            .iter()
+            .position(|name| header_key(name) == header_key("来源工作表"))
+            .unwrap_or(0)
+    });
 
     OutputPlan {
         headers,
