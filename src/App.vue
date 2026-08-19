@@ -26,6 +26,14 @@ function onKeyDown(event: KeyboardEvent) {
   }
 }
 
+// 屏蔽 WebView 自带的浏览器右键菜单（后退/刷新/查看源代码等，容易误操作）；
+// 文本框/文本域仍保留原生菜单，方便右键粘贴。
+function onContextMenu(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest?.("input, textarea, [contenteditable='true']")) return;
+  event.preventDefault();
+}
+
 let unlistenDrop: (() => void) | undefined;
 
 onMounted(async () => {
@@ -33,6 +41,7 @@ onMounted(async () => {
   await store.loadState();
   await store.refreshPlan();
   window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("contextmenu", onContextMenu);
   unlistenDrop = await getCurrentWebviewWindow().onDragDropEvent((event) => {
     if (event.payload.type === "drop") {
       void store.scanFiles(event.payload.paths);
@@ -42,6 +51,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onKeyDown);
+  window.removeEventListener("contextmenu", onContextMenu);
   unlistenDrop?.();
 });
 </script>
