@@ -6,11 +6,6 @@ const store = useMergeStore();
 
 <template>
   <div class="sf-topbar">
-    <div class="sf-logo">表</div>
-    <div class="sf-brand">
-      <b>表格合并</b>
-      <small>Excel / CSV 批量整理与合并</small>
-    </div>
     <el-menu
       mode="horizontal"
       :default-active="String(store.activePage)"

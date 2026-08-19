@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import TopBar from "./components/TopBar.vue";
+import TitleBar from "./components/TitleBar.vue";
 import BottomBar from "./components/BottomBar.vue";
 import AboutDialog from "./components/AboutDialog.vue";
 import DataSourceView from "./views/DataSourceView.vue";
@@ -58,6 +59,7 @@ onUnmounted(() => {
 
 <template>
   <div class="app-shell">
+    <TitleBar />
     <TopBar />
     <div class="app-content">
       <DataSourceView v-if="store.activePage === 0" />
