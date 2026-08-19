@@ -66,7 +66,7 @@ const filteredGroups = computed(() => {
             :model-value="row.uniformTarget ?? ''"
             size="small"
             placeholder="多个值"
-            @change="(v: string | number | undefined) => store.setFieldTarget(row.key, String(v ?? ''))"
+            @update:model-value="(v: string) => store.setFieldTarget(row.key, v)"
           />
         </template>
       </el-table-column>

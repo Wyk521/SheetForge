@@ -1,31 +1,31 @@
 /* ============================================================
-   SheetForge 现代主题
-   中性石墨头部 / 冷调浅灰背景 / 圆角卡片 / 单一强调色（无渐变）
+   SheetForge 沉浸式一体主题
+   整页统一冷调浅色渐变基调，头部融入背景，无深色块切割
    ============================================================ */
 
 :root {
-  /* 单一强调色（克制使用，无渐变） */
+  /* 单一强调色 */
   --sf-primary: #4f6ef7;
   --sf-primary-dark: #3d56d6;
 
-  /* 头部（标题栏 + 导航一体）—— 中性石墨色，非黑非渐变 */
-  --sf-header-bg: #262d3d;
-  --sf-header-text: #ffffff;
+  /* 页面整体基调（同一渐变，从上到下无缝延续 → 沉浸一体） */
+  --sf-bg-page-start: #eff2f9;
+  --sf-bg-page-end: #e7ecf6;
 
-  /* 内容背景（冷调浅灰，非纯白） */
-  --sf-bg-page: #f3f5f9;
+  /* 卡片（在浅灰基调上浮起的白色面板） */
   --sf-bg-card: #ffffff;
 
   /* 边框 / 文字 */
-  --sf-border: #e2e6ef;
-  --sf-border-soft: #eef1f8;
-  --sf-text: #2b2f3a;
-  --sf-text-secondary: #5b6270;
-  --sf-text-muted: #8b93a5;
+  --sf-border: #e1e6f2;
+  --sf-border-soft: #eceff8;
+  --sf-text: #2c3140;
+  --sf-text-secondary: #5a6173;
+  --sf-text-muted: #8b93a8;
 
-  /* 卡片阴影 / 圆角 */
-  --sf-shadow-card: 0 4px 16px rgba(40, 50, 90, 0.07);
-  --sf-radius-card: 12px;
+  /* 阴影 / 圆角 */
+  --sf-shadow-card: 0 6px 20px rgba(45, 60, 115, 0.07);
+  --sf-shadow-pop: 0 12px 32px rgba(45, 60, 115, 0.14);
+  --sf-radius-card: 14px;
   --sf-radius-lg: 10px;
   --sf-radius-md: 8px;
 
@@ -37,7 +37,7 @@
   --el-color-primary-light-8: #dfe6fe;
   --el-color-primary-light-9: #eef2fe;
   --el-color-primary-dark-2: #3d56d6;
-  --el-border-radius-base: 6px;
+  --el-border-radius-base: 7px;
 }
 
 * {
@@ -53,9 +53,12 @@ body,
   font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   font-size: 13px;
   color: var(--sf-text);
-  background: var(--sf-bg-page);
   overflow: hidden;
   user-select: none;
+}
+
+#app {
+  background: linear-gradient(180deg, var(--sf-bg-page-start) 0%, var(--sf-bg-page-end) 100%);
 }
 
 .app-shell {
@@ -67,20 +70,19 @@ body,
 .app-content {
   flex: 1;
   overflow-y: auto;
-  padding: 18px 22px;
+  padding: 18px 24px;
   background: transparent;
 }
 
 /* ============================================================
-   头部（标题栏 + 导航）—— 中性石墨色
+   头部（标题栏 + 导航）—— 融入页面基调，不单独成块
    ============================================================ */
 .sf-titlebar {
   flex-shrink: 0;
   height: 34px;
   display: flex;
   align-items: stretch;
-  background: var(--sf-header-bg);
-  color: var(--sf-header-text);
+  background: transparent;
   user-select: none;
 }
 
@@ -88,14 +90,14 @@ body,
   flex: 1;
   display: flex;
   align-items: center;
-  padding-left: 14px;
+  padding-left: 16px;
   cursor: default;
 }
 
 .sf-titlebar-title {
   font-size: 11.5px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--sf-text-secondary);
   letter-spacing: 0.3px;
 }
 
@@ -105,22 +107,23 @@ body,
 }
 
 .sf-win-btn {
-  width: 46px;
+  width: 44px;
   height: 100%;
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--sf-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   padding: 0;
   transition: background 0.12s, color 0.12s;
+  border-radius: 0 0 0 0;
 }
 
 .sf-win-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: #fff;
+  background: rgba(45, 60, 115, 0.08);
+  color: var(--sf-text);
 }
 
 .sf-win-close:hover {
@@ -128,74 +131,78 @@ body,
   color: #fff;
 }
 
-/* 顶栏（导航）—— 与标题栏同色，视觉连成一条头部 */
+/* 导航栏 —— 透明融入背景，用细线 + 品牌色点缀 */
 .sf-topbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 58px;
-  padding: 0 20px;
-  background: var(--sf-header-bg);
+  height: 56px;
+  padding: 0 22px;
+  background: transparent;
+  border-bottom: 1px solid var(--sf-border);
   flex-shrink: 0;
 }
 
-/* 导航菜单在深色头部上的样式 */
 .sf-topbar .sf-nav {
   border-bottom: none;
-  margin-left: 4px;
+  margin-left: 2px;
   background: transparent;
   --el-menu-bg-color: transparent;
-  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.12);
-  --el-menu-active-color: #ffffff;
-  --el-menu-text-color: rgba(255, 255, 255, 0.78);
+  --el-menu-hover-bg-color: rgba(79, 110, 247, 0.08);
+  --el-menu-text-color: var(--sf-text-secondary);
+  --el-menu-active-color: var(--sf-primary);
 }
 
 .sf-topbar .sf-nav .el-menu-item {
   height: 46px;
   line-height: 46px;
-  margin: 4px 2px 0;
-  border-radius: 6px 6px 0 0;
+  margin: 5px 2px 0;
+  border-radius: var(--sf-radius-md);
   font-weight: 500;
-  border-bottom: none !important;
   transition: background 0.15s, color 0.15s;
 }
 
-.sf-topbar .sf-nav .el-menu-item:hover,
-.sf-topbar .sf-nav .el-menu-item.is-active {
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
-  font-weight: 600;
+.sf-topbar .sf-nav .el-menu-item:hover {
+  background: rgba(79, 110, 247, 0.08);
+  color: var(--sf-primary);
 }
 
-/* 顶栏按钮（保存方案 / 打开方案 / 关于）在深色头部上白字 */
+.sf-topbar .sf-nav .el-menu-item.is-active {
+  color: var(--sf-primary);
+  font-weight: 600;
+  background: rgba(79, 110, 247, 0.1);
+}
+
+/* 顶栏按钮（保存方案 / 打开方案 / 关于） */
 .sf-topbar .el-button.is-text {
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--sf-text-secondary);
 }
 
 .sf-topbar .el-button.is-text:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.12);
+  color: var(--sf-primary);
+  background: rgba(79, 110, 247, 0.08);
 }
 
-/* 底栏 */
+/* 底栏 —— 与页面基调同色，细线分隔，不突兀 */
 .sf-bottombar {
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.96);
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(6px);
   border-top: 1px solid var(--sf-border);
-  padding: 12px 20px 14px;
+  padding: 12px 24px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  box-shadow: 0 -4px 16px rgba(40, 50, 90, 0.05);
 }
 
 .sf-metric {
-  background: #f4f6fc;
+  background: var(--sf-bg-card);
   border: 1px solid var(--sf-border);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 6px 14px;
   min-width: 104px;
   text-align: center;
+  box-shadow: 0 2px 8px rgba(45, 60, 115, 0.04);
 }
 
 .sf-metric small {
@@ -237,9 +244,9 @@ body,
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  background: #f4f6fc;
-  border: 1px solid var(--sf-border-soft);
-  border-radius: 8px;
+  background: var(--sf-bg-page-start);
+  border: 1px solid var(--sf-border);
+  border-radius: 10px;
   margin: 4px 2px;
 }
 
@@ -250,11 +257,11 @@ body,
   padding: 9px 14px 9px 26px;
   border-bottom: 1px solid var(--sf-border-soft);
   transition: background 0.12s;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .sf-sheet-row:hover {
-  background: #f7f9ff;
+  background: var(--sf-bg-page-start);
 }
 
 .sf-row-name {
@@ -272,11 +279,11 @@ body,
   font-variant-numeric: tabular-nums;
 }
 
-/* 品牌 logo（关于对话框等处），单色圆角块 */
+/* 品牌 logo（单色圆角块） */
 .sf-logo {
   width: 34px;
   height: 34px;
-  border-radius: 8px;
+  border-radius: 9px;
   background: var(--sf-primary);
   color: #fff;
   display: flex;
@@ -287,9 +294,10 @@ body,
   flex-shrink: 0;
 }
 
-/* 卡片 / 面板统一样式增强 */
+/* 卡片 / 面板统一样式增强（浮在浅灰基调上的白色面板） */
 .el-card.is-never-shadow {
   border-radius: var(--sf-radius-card);
   border: 1px solid var(--sf-border);
   box-shadow: var(--sf-shadow-card);
+  background: var(--sf-bg-card);
 }
