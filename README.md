@@ -82,7 +82,8 @@ src-tauri/src/
   model.rs            合并、汇总、关联、清洗和字段映射模型
   inspect.rs          源数据/结果预览、检查报告、相似字段建议
   merge.rs            统一行处理管线与恒定内存 XLSX 写出
-  database.rs         pg-table-importer 连接/凭据/目标表/COPY 适配层
+  database.rs         SheetForge 行流与 PostgreSQL 导入的适配层
+  pg_import/          已融合的连接/凭据/目标表/字段映射/COPY 核心
   commands.rs         Tauri 命令入口与后台任务状态
 ```
 

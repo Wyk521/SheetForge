@@ -8,6 +8,7 @@ mod engine_tests;
 mod inspect;
 mod merge;
 mod model;
+mod pg_import;
 mod scan;
 
 fn main() {

@@ -17,7 +17,7 @@
 
 ## PostgreSQL 能力复用
 
-`src-tauri/Cargo.toml` 将 pg-table-importer 固定到提交 `55c9f7df4897307121ac37f7066cc892d4c27ba4`。`database.rs` 只负责把 SheetForge 的最终行流接到其公开组件：
+pg-table-importer 0.2.1 提交 `55c9f7df4897307121ac37f7066cc892d4c27ba4` 中实际使用的导入核心已经融合到 `src-tauri/src/pg_import/`。SheetForge 不再通过 Git 或运行时依赖另一个项目，即使原仓库移动或删除也能独立复现构建。`database.rs` 只负责把 SheetForge 的最终行流接到这些内置组件：
 
 - `config`：读取和保存无密码 TOML 连接配置；
 - `credentials`：Windows Credential Manager 等系统凭据管理器；

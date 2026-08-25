@@ -1,9 +1,6 @@
 use crate::merge::{stream_merged_rows, MergeFailedDto, MergeProgressDto};
 use crate::model::{build_output_plan, MergeOptions, SourceTable};
-use anyhow::{anyhow, Result};
-use bytes::Bytes;
-use futures_util::SinkExt;
-use pg_table_importer::{
+use crate::pg_import::{
     config::{self as pg_config, AppConfig, ConnectionProfile},
     credentials,
     postgres::{
@@ -16,6 +13,9 @@ use pg_table_importer::{
         copy_encoder::encode_copy_row_into,
     },
 };
+use anyhow::{anyhow, Result};
+use bytes::Bytes;
+use futures_util::SinkExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};

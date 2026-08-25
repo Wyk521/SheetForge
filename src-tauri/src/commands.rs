@@ -6,11 +6,11 @@ use crate::inspect::{
 };
 use crate::merge::{spawn_merge, spawn_preflight};
 use crate::model::{build_output_plan, common_header_keys, MergeOptions, SourceTable};
+use crate::pg_import::config::ConnectionProfile;
+use crate::pg_import::postgres::connection::ConnectionInfo;
 use crate::scan::{
     collect_folder, spawn_group_reload, spawn_scan, spawn_table_reload, supported_file,
 };
-use pg_table_importer::config::ConnectionProfile;
-use pg_table_importer::postgres::connection::ConnectionInfo;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
