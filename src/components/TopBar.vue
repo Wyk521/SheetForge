@@ -22,6 +22,7 @@ const store = useMergeStore();
       保存方案
     </el-button>
     <el-button text :disabled="store.busy" @click="store.openScheme()">打开方案</el-button>
+    <el-button text :disabled="store.busy" @click="store.openDatabaseConnections()">数据库连接</el-button>
     <el-button text @click="store.showAbout = true">关于</el-button>
   </div>
 </template>

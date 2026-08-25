@@ -1,6 +1,6 @@
 # 表格合并
 
-一个面向 Windows 的现代原生 GUI 工具，用来批量整理与合并 Excel / CSV 数据。使用 Rust + Slint 开发，不依赖 Python、不依赖浏览器内核，表格内容不会上传。
+一个面向 Windows 的本地桌面工具，用来批量整理、合并 Excel / CSV 数据，并把同一份处理结果导出为 XLSX 或高速导入 PostgreSQL。界面使用 Vue 3 + Tauri，数据处理与数据库 COPY 使用 Rust；不依赖 Python，表格内容不会上传。
 
 ## 下载 Windows 成品
 
@@ -29,6 +29,11 @@
 - 超过 XLSX 的 1,048,576 行限制时，自动创建 `合并结果_002`、`合并结果_003` 等 Sheet；每个 Sheet 都保留表头。
 - CSV 通过多行一致性识别逗号、Tab、分号、竖线分隔，兼容引号字段、UTF-8 与常见 GBK 中文文件；大型 CSV 用采样估算行数，避免合并前重复完整扫描。
 - 合并在后台执行，界面实时显示进度并可取消。
+- 最后一步可在两种输出目标间直接切换：
+  - **Excel 文件**：保持原有恒定内存 XLSX 写出与超限自动拆 Sheet。
+  - **PostgreSQL**：把完成表头修正、交并集、清洗、去重、汇总或关联后的同一行流导入数据库。
+- PostgreSQL 功能复用 `pg-table-importer` 的连接与导入核心：连接配置增删改选、系统凭据管理器、SSL、中文/超长字段名映射、`abort/append/truncate/replace`、二进制/文本 COPY、事务回滚、`COPY FREEZE`、持久表/UNLOGGED 表和快速提交。
+- 数据库密码绝不写入 TOML 或合并方案；勾选记住密码时只保存到 Windows Credential Manager，并与 `pg-table-importer` CLI 共用连接配置。
 - XLSX 写出使用恒定内存模式；同一工作簿的多个 Sheet 会复用一次打开，文件扫描最多 4 路并行。
 - 设置保存在 `%APPDATA%\表格合并`，错误和合并记录可在“关于 → 查看日志”打开。
 - “关于”中可主动检查 GitHub 新版本；除此之外软件不会联网，表格内容始终仅在本机处理。
@@ -55,7 +60,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 2. 在数据表列表中取消不需要的 Sheet；若表头不在第一行，调整“开始行”；只有跨多行的复合表头才需要调整“占用行数”。
 3. 在“合并规则”选择并集、交集、修正表头、按键汇总或横向关联，并按需要设置筛选、去重、清洗和输出顺序。
 4. 在“预览与检查”查看源数据、结果前 30 行和检查报告。
-5. 选择输出位置，点击“开始合并”。软件会再次执行阻断性检查，并在覆盖已有文件前确认。
+5. 在底部选择输出到“Excel 文件”或“PostgreSQL”。数据库模式先配置连接、schema、目标表和表存在策略；点击开始后软件会再次执行阻断性检查，对清空/重建表再次确认。
 
 ## 合并规则细节
 
@@ -68,21 +73,22 @@ Set-ExecutionPolicy -Scope Process Bypass
 ## 项目结构
 
 ```text
-ui/
-  app-window.slint  现代桌面界面与自适应布局
 src/
-  app.rs      Slint 交互桥接、后台任务状态
-  scan.rs     递归发现文件、读取表头、CSV 编码与分隔符处理
-  model.rs    合并、汇总、关联、清洗和字段映射的数据模型
-  inspect.rs  源数据/结果预览、检查报告、相似字段建议
-  config.rs   合并方案、设置与本地日志
-  merge.rs    流式合并、汇总/关联、恒定内存 XLSX 写出、自动拆分 Sheet
-  main.rs     Windows 程序入口
+  views/              数据源、合并规则、预览与检查
+  components/         底部目标切换、数据库设置、标题栏等组件
+  stores/merge.ts     前端任务状态、Tauri 命令与事件桥
+src-tauri/src/
+  scan.rs             文件发现、表头识别、CSV 编码与分隔符处理
+  model.rs            合并、汇总、关联、清洗和字段映射模型
+  inspect.rs          源数据/结果预览、检查报告、相似字段建议
+  merge.rs            统一行处理管线与恒定内存 XLSX 写出
+  database.rs         pg-table-importer 连接/凭据/目标表/COPY 适配层
+  commands.rs         Tauri 命令入口与后台任务状态
 ```
 
 ## 隐私与兼容性
 
-所有表格处理都在本机完成，文件内容不会上传。只有用户主动点击“检查更新”时，程序才会请求 GitHub Releases API。每个发布文件都带 SHA-256 校验值和 GitHub 构建来源证明；工作流也预留了 Authenticode 证书签名步骤，配置 `WINDOWS_CERTIFICATE_BASE64` 与 `WINDOWS_CERTIFICATE_PASSWORD` 后会自动签名。界面使用 Slint，其许可要求的归属信息位于应用的“关于”对话框中。
+所有表格处理都在本机完成，文件内容不会上传。数据库模式只连接用户明确配置的 PostgreSQL 地址；除此之外，只有用户主动点击“检查更新”时程序才会请求 GitHub Releases API。每个发布文件都带 SHA-256 校验值和 GitHub 构建来源证明；工作流也预留了 Authenticode 证书签名步骤，配置 `WINDOWS_CERTIFICATE_BASE64` 与 `WINDOWS_CERTIFICATE_PASSWORD` 后会自动签名。
 
 ## License
 

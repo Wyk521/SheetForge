@@ -99,7 +99,11 @@ pub fn preview_merged(
     })
 }
 
-pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIssue> {
+pub fn preflight_for_destination(
+    tables: &[SourceTable],
+    options: &MergeOptions,
+    database: bool,
+) -> Vec<CheckIssue> {
     let enabled = tables
         .iter()
         .filter(|table| table.enabled)
@@ -121,11 +125,19 @@ pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIss
             "请检查映射或合并方式。",
         ));
     }
-    if plan.headers.len() > 16_384 {
+    let column_limit = if database { 1_600 } else { 16_384 };
+    if plan.headers.len() > column_limit {
         issues.push(issue(
             IssueLevel::Error,
-            "列数超出 XLSX 限制",
-            &format!("预计输出 {} 列。", plan.headers.len()),
+            if database {
+                "列数超出 PostgreSQL 限制"
+            } else {
+                "列数超出 XLSX 限制"
+            },
+            &format!(
+                "预计输出 {} 列，目标最多支持 {column_limit} 列。",
+                plan.headers.len()
+            ),
         ));
     }
     let rows: u64 = enabled.iter().map(|table| table.estimated_rows).sum();
@@ -134,15 +146,23 @@ pub fn preflight(tables: &[SourceTable], options: &MergeOptions) -> Vec<CheckIss
         .filter_map(|table| std::fs::metadata(&table.path).ok())
         .map(|metadata| metadata.len())
         .sum();
-    let sheets = rows.div_ceil(1_048_575).max(1);
-    issues.push(issue(
-        IssueLevel::Info,
-        "输出规模",
-        &format!(
-            "预计 {rows} 行、{} 列、约 {sheets} 个结果 Sheet。",
-            plan.headers.len()
-        ),
-    ));
+    if database {
+        issues.push(issue(
+            IssueLevel::Info,
+            "导入规模",
+            &format!("预计向目标表导入 {rows} 行、{} 列。", plan.headers.len()),
+        ));
+    } else {
+        let sheets = rows.div_ceil(1_048_575).max(1);
+        issues.push(issue(
+            IssueLevel::Info,
+            "输出规模",
+            &format!(
+                "预计 {rows} 行、{} 列、约 {sheets} 个结果 Sheet。",
+                plan.headers.len()
+            ),
+        ));
+    }
     issues.push(issue(
         IssueLevel::Info,
         "输入文件规模",

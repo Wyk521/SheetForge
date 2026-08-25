@@ -5,14 +5,22 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
+  defaultConnectionProfile,
+  defaultDatabaseImportOptions,
   defaultOptions,
   type AppSettings,
   type CheckIssue,
   type ColumnMapping,
+  type ConnectionInfo,
+  type ConnectionProfile,
+  type DatabaseImportFinished,
+  type DatabaseImportOptions,
+  type DatabaseProfiles,
   type MergeFinished,
   type MergeOptions,
   type MergeProgress,
   type MergeScheme,
+  type OutputDestination,
   type PreflightDone,
   type PreviewTable,
   type ScanFinished,
@@ -49,6 +57,13 @@ export const useMergeStore = defineStore("merge", () => {
   const sources = ref<SourceTable[]>([]);
   const options = ref<MergeOptions>(defaultOptions());
   const outputPath = ref("");
+  const outputDestination = ref<OutputDestination>("xlsx");
+  const databaseImport = ref<DatabaseImportOptions>(defaultDatabaseImportOptions());
+  const databaseProfiles = ref<Record<string, ConnectionProfile>>({});
+  const databaseConfigPath = ref("");
+  const showDatabaseDialog = ref(false);
+  const showDatabaseConnectionsDialog = ref(false);
+  const databaseLastResult = ref<DatabaseImportFinished | null>(null);
   const inputLabel = ref("尚未选择文件或文件夹，可直接拖放");
   const phase = ref<AppPhase>("ready");
   const progress = ref(0);
@@ -87,9 +102,21 @@ export const useMergeStore = defineStore("merge", () => {
       .reduce((sum, t) => sum + t.estimated_rows, 0)
   );
   const sheetsMetric = computed(() => Math.max(1, Math.ceil(rowsMetric.value / 1_048_575)));
-  const canStart = computed(
-    () => !busy.value && sources.value.filter((t) => t.enabled).length > 0 && planHeaders.value.length > 0
+  const databaseReady = computed(
+    () =>
+      !!databaseImport.value.profile_name &&
+      !!databaseProfiles.value[databaseImport.value.profile_name] &&
+      !!databaseImport.value.schema.trim() &&
+      !!databaseImport.value.table.trim()
   );
+  const canStart = computed(() => {
+    const ready =
+      !busy.value &&
+      sources.value.some((t) => t.enabled) &&
+      planHeaders.value.length > 0;
+    if (!ready) return false;
+    return outputDestination.value === "xlsx" ? !!outputPath.value.trim() : databaseReady.value;
+  });
 
   const fieldGroups = computed<FieldGroup[]>(() => {
     const byKey = new Map<
@@ -161,6 +188,78 @@ export const useMergeStore = defineStore("merge", () => {
   function displayName(table: SourceTable): string {
     const file = table.path.split(/[\\/]/).pop() ?? "";
     return `${file}  /  ${table.sheet_name}`;
+  }
+
+  // ---- PostgreSQL 连接与目标 ----
+  async function loadDatabaseProfiles() {
+    try {
+      const result = await invoke<DatabaseProfiles>("get_database_profiles");
+      databaseProfiles.value = result.profiles;
+      databaseConfigPath.value = result.config_path;
+      if (
+        databaseImport.value.profile_name &&
+        !databaseProfiles.value[databaseImport.value.profile_name]
+      ) {
+        databaseImport.value.profile_name = "";
+      }
+      if (!databaseImport.value.profile_name) {
+        databaseImport.value.profile_name = Object.keys(databaseProfiles.value)[0] ?? "";
+      }
+    } catch (error) {
+      databaseProfiles.value = {};
+      ElMessage.error(`读取数据库连接配置失败：${error}`);
+    }
+  }
+
+  async function saveDatabaseProfile(
+    name: string,
+    profile: ConnectionProfile,
+    password: string,
+    rememberPassword: boolean
+  ): Promise<string | null> {
+    const warning = await invoke<string | null>("save_database_profile", {
+      name,
+      profile,
+      password: password || null,
+      rememberPassword,
+    });
+    await loadDatabaseProfiles();
+    databaseImport.value.profile_name = name.trim();
+    return warning;
+  }
+
+  async function deleteDatabaseProfile(name: string) {
+    await invoke("delete_database_profile", { name });
+    if (databaseImport.value.profile_name === name) databaseImport.value.profile_name = "";
+    await loadDatabaseProfiles();
+  }
+
+  async function testDatabaseConnection(
+    profileName: string | undefined,
+    profile: ConnectionProfile,
+    password: string
+  ): Promise<ConnectionInfo> {
+    return invoke<ConnectionInfo>("test_database_connection", {
+      profileName: profileName || null,
+      profile,
+      password: password || null,
+    });
+  }
+
+  function newDatabaseProfile(): ConnectionProfile {
+    return defaultConnectionProfile();
+  }
+
+  function openDatabaseTarget() {
+    if (Object.keys(databaseProfiles.value).length === 0) {
+      showDatabaseConnectionsDialog.value = true;
+      return;
+    }
+    showDatabaseDialog.value = true;
+  }
+
+  function openDatabaseConnections() {
+    showDatabaseConnectionsDialog.value = true;
   }
 
   // ---- 扫描 / 数据源 ----
@@ -466,24 +565,34 @@ export const useMergeStore = defineStore("merge", () => {
     if (busy.value) return;
     phase.value = "checking";
     progress.value = 0;
-    progressLabel.value = "正在执行合并前检查…";
+    progressLabel.value = "正在执行处理前检查…";
     await invoke("run_preflight", {
       tables: sources.value,
       options: options.value,
       continuesMerge,
+      destination: outputDestination.value,
     });
   }
 
   async function confirmMerge() {
     try {
-      await invoke("start_merge", {
-        tables: sources.value,
-        options: options.value,
-        output: outputPath.value,
-      });
+      if (outputDestination.value === "xlsx") {
+        await invoke("start_merge", {
+          tables: sources.value,
+          options: options.value,
+          output: outputPath.value,
+        });
+      } else {
+        await invoke("start_database_import", {
+          tables: sources.value,
+          options: options.value,
+          request: databaseImport.value,
+        });
+      }
       phase.value = "merging";
       progress.value = 0;
-      progressLabel.value = "正在准备输出工作簿…";
+      progressLabel.value =
+        outputDestination.value === "xlsx" ? "正在准备输出工作簿…" : "正在连接 PostgreSQL…";
     } catch (error) {
       phase.value = "ready";
       ElMessage.error(String(error));
@@ -491,8 +600,13 @@ export const useMergeStore = defineStore("merge", () => {
   }
 
   async function startMerge() {
-    if (!outputPath.value.trim()) {
+    if (outputDestination.value === "xlsx" && !outputPath.value.trim()) {
       ElMessage.error("请先选择输出文件");
+      return;
+    }
+    if (outputDestination.value === "postgres" && !databaseReady.value) {
+      openDatabaseTarget();
+      ElMessage.error("请先选择数据库连接并填写目标表");
       return;
     }
     await runPreflight(true);
@@ -501,7 +615,13 @@ export const useMergeStore = defineStore("merge", () => {
   async function cancelMerge() {
     if (phase.value !== "merging") return;
     try {
-      await ElMessageBox.confirm("确定取消当前合并？已写入的部分不会保留。", "确认操作", { type: "warning" });
+      await ElMessageBox.confirm(
+        outputDestination.value === "xlsx"
+          ? "确定取消当前合并？已写入的部分不会保留。"
+          : "确定取消当前导入？数据库事务会回滚，不会保留部分数据。",
+        "确认操作",
+        { type: "warning" }
+      );
     } catch {
       return;
     }
@@ -566,6 +686,7 @@ export const useMergeStore = defineStore("merge", () => {
   async function loadState() {
     const state = await invoke<{ settings: AppSettings }>("get_state");
     settings.value = state.settings;
+    await loadDatabaseProfiles();
   }
 
   // ---- 事件桥（启动时调用一次） ----
@@ -641,6 +762,15 @@ export const useMergeStore = defineStore("merge", () => {
         ElMessage.success(`合并完成：${formatNumber(e.payload.rows)} 行，${e.payload.sheets} 个 Sheet`);
         void revealOutput(e.payload.output);
       }),
+      await listen<DatabaseImportFinished>("database-import-finished", (e) => {
+        databaseLastResult.value = e.payload;
+        phase.value = "ready";
+        progress.value = 1;
+        progressLabel.value = "数据库导入完成";
+        ElMessage.success(
+          `已导入 ${formatNumber(e.payload.rows)} 行到 ${e.payload.target}`
+        );
+      }),
       await listen("merge-cancelled", () => {
         phase.value = "ready";
         progressLabel.value = "已取消";
@@ -657,16 +787,25 @@ export const useMergeStore = defineStore("merge", () => {
         if (errors.length > 0) {
           phase.value = "ready";
           progressLabel.value = "";
-          ElMessage.error(`合并前检查未通过：${errors[0].title} — ${errors[0].detail}`);
+          ElMessage.error(`处理前检查未通过：${errors[0].title} — ${errors[0].detail}`);
         } else if (e.payload.continues_merge) {
-          const exists = await invoke<boolean>("path_exists", { path: outputPath.value });
-          if (exists) {
-            try {
-              await ElMessageBox.confirm(`${outputPath.value} 已存在，是否覆盖？`, "覆盖已有文件", { type: "warning" });
-            } catch {
-              phase.value = "ready";
-              return;
+          try {
+            if (outputDestination.value === "xlsx") {
+              const exists = await invoke<boolean>("path_exists", { path: outputPath.value });
+              if (exists) {
+                await ElMessageBox.confirm(`${outputPath.value} 已存在，是否覆盖？`, "覆盖已有文件", { type: "warning" });
+              }
+            } else if (["truncate", "replace"].includes(databaseImport.value.if_exists)) {
+              const action = databaseImport.value.if_exists === "replace" ? "删除并重建" : "清空";
+              await ElMessageBox.confirm(
+                `即将${action}数据表 ${databaseImport.value.schema}.${databaseImport.value.table}，是否继续？`,
+                "确认数据库写入",
+                { type: "warning", confirmButtonText: "确认并开始" }
+              );
             }
+          } catch {
+            phase.value = "ready";
+            return;
           }
           await confirmMerge();
         } else {
@@ -711,13 +850,15 @@ export const useMergeStore = defineStore("merge", () => {
 
   return {
     // state
-    sources, options, outputPath, inputLabel, phase, progress, progressLabel, warnings,
+    sources, options, outputPath, outputDestination, databaseImport, databaseProfiles,
+    databaseConfigPath, databaseLastResult, showDatabaseDialog, showDatabaseConnectionsDialog,
+    inputLabel, phase, progress, progressLabel, warnings,
     checkIssues, checkRan, preview, previewTitle, settings, updateText, updateUrl,
     collapsedGroups, selectedMappingTable, hideCommonMappings, mismatchOnly,
     sourceSearch, mappingSearch, mappingScope, onlyMultiField, planHeaders, planCommonKeys,
     activePage, showAbout,
     // getters
-    busy, hasSources, enabledIndices, rowsMetric, sheetsMetric, canStart, fieldGroups, formatNumber,
+    busy, hasSources, enabledIndices, rowsMetric, sheetsMetric, databaseReady, canStart, fieldGroups, formatNumber,
     // actions
     chooseFolder, chooseFiles, scanFolder, scanFiles, clearSources,
     toggleSourceEnabled, selectAll, toggleGroup, setGroupEnabled, removeGroup, removeSource,
@@ -727,6 +868,8 @@ export const useMergeStore = defineStore("merge", () => {
     setFieldTarget, setFieldEnabled, setFieldTransform, resetField, toggleCommonFields: () => (hideCommonMappings.value = !hideCommonMappings.value),
     setMismatchOnly: (v: boolean) => (mismatchOnly.value = v),
     showSourcePreview, showMergedPreview, runPreflight, startMerge, cancelMerge,
+    loadDatabaseProfiles, saveDatabaseProfile, deleteDatabaseProfile, testDatabaseConnection,
+    newDatabaseProfile, openDatabaseTarget, openDatabaseConnections,
     saveScheme, openScheme, openSchemeByPath, checkUpdate, loadState, initEvents, revealOutput, openLog, refreshPlan,
     displayName, MODE_LABELS,
   };

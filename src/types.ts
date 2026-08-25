@@ -6,6 +6,10 @@ export type TransformOp = "None" | "Trim" | "Uppercase" | "Lowercase";
 export type AggregateOp = "First" | "Sum" | "UniqueJoin" | "TextJoin";
 export type JoinKind = "Left" | "Inner" | "Full";
 export type IssueLevel = "Info" | "Warning" | "Error";
+export type OutputDestination = "xlsx" | "postgres";
+export type IfExistsMode = "abort" | "append" | "truncate" | "replace";
+export type CopyFormat = "binary" | "text";
+export type TablePersistence = "logged" | "unlogged";
 
 export interface ColumnMapping {
   source_index: number;
@@ -114,6 +118,52 @@ export interface UpdateResult {
   newer: boolean;
 }
 
+export interface ConnectionProfile {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  sslmode: string;
+}
+
+export interface DatabaseProfiles {
+  profiles: Record<string, ConnectionProfile>;
+  config_path: string;
+}
+
+export interface DatabaseImportOptions {
+  profile_name: string;
+  password?: string;
+  remember_password: boolean;
+  schema: string;
+  table: string;
+  if_exists: IfExistsMode;
+  copy_format: CopyFormat;
+  table_persistence: TablePersistence;
+  empty_as_null: boolean;
+  fast_mode: boolean;
+}
+
+export interface ConnectionInfo {
+  server_version: string;
+  database: string;
+  user: string;
+  elapsed_ms: number;
+}
+
+export interface DatabaseImportFinished {
+  rows: number;
+  bytes: number;
+  batches: number;
+  server: string;
+  database: string;
+  target: string;
+  elapsed_ms: number;
+  copy_format: string;
+  table_persistence: string;
+  copy_freeze: boolean;
+}
+
 export const defaultOptions = (): MergeOptions => ({
   mode: "Union",
   include_source_file: false,
@@ -126,4 +176,25 @@ export const defaultOptions = (): MergeOptions => ({
   filter_column: "",
   filter_text: "",
   filter_exclude: false,
+});
+
+export const defaultConnectionProfile = (): ConnectionProfile => ({
+  host: "localhost",
+  port: 5432,
+  database: "postgres",
+  user: "postgres",
+  sslmode: "prefer",
+});
+
+export const defaultDatabaseImportOptions = (): DatabaseImportOptions => ({
+  profile_name: "",
+  password: "",
+  remember_password: true,
+  schema: "public",
+  table: "",
+  if_exists: "abort",
+  copy_format: "binary",
+  table_persistence: "logged",
+  empty_as_null: true,
+  fast_mode: false,
 });

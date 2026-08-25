@@ -1,4 +1,4 @@
-use crate::inspect::{preflight, CheckIssue};
+use crate::inspect::{preflight_for_destination, CheckIssue};
 use crate::model::{
     build_output_plan, header_key, source_to_output_map, AggregateOp, JoinKind, MergeMode,
     MergeOptions, OutputPlan, SourceKind, SourceTable, TransformOp,
@@ -107,10 +107,11 @@ pub fn spawn_preflight(
     tables: Vec<SourceTable>,
     options: MergeOptions,
     continues_merge: bool,
+    database: bool,
     app: AppHandle,
 ) {
     std::thread::spawn(move || {
-        let issues = preflight(&tables, &options);
+        let issues = preflight_for_destination(&tables, &options, database);
         let _ = app.emit(
             "preflight-done",
             PreflightDoneDto {
@@ -143,26 +144,74 @@ pub(crate) fn merge_tables(
         return Err(anyhow!("输出列数超过 XLSX 的 16,384 列限制"));
     }
 
-    match options.mode {
-        MergeMode::Consolidate => merge_consolidated(&enabled, options, plan, output, emit, cancel),
-        MergeMode::Join => merge_joined(&enabled, options, plan, output, emit, cancel),
-        _ => merge_appended(&enabled, options, plan, output, emit, cancel),
+    let mut sink = XlsxSink::new(plan.clone())?;
+    let rows = merge_into_sink(&enabled, options, &plan, &mut sink, emit, cancel)?;
+    match rows {
+        Some(rows) => finish_sink(sink, output, rows, cancel),
+        None => Ok(None),
     }
 }
 
-fn merge_appended(
-    tables: &[&SourceTable],
+/// 将 SheetForge 已应用表头修改、交并集、清洗、汇总或关联后的最终行流交给调用方。
+/// PostgreSQL 适配层使用此入口，确保数据库与 XLSX 得到完全相同的业务数据。
+pub(crate) fn stream_merged_rows<F>(
+    tables: &[SourceTable],
     options: &MergeOptions,
-    plan: OutputPlan,
-    output: &Path,
+    empty_as_null: bool,
     emit: &dyn Fn(u64, u64, String),
     cancel: &AtomicBool,
-) -> Result<Option<(u64, usize)>> {
+    write_row: F,
+) -> Result<Option<(OutputPlan, u64)>>
+where
+    F: FnMut(Vec<Option<String>>) -> Result<()>,
+{
+    let enabled = tables
+        .iter()
+        .filter(|table| table.enabled)
+        .collect::<Vec<_>>();
+    if enabled.is_empty() {
+        return Err(anyhow!("没有勾选任何表"));
+    }
+    let plan = build_output_plan(tables, options);
+    if plan.headers.is_empty() {
+        return Err(anyhow!("合并后没有可导入的列，请检查合并方式或字段映射"));
+    }
+    let mut sink = CallbackSink {
+        write_row,
+        empty_as_null,
+        total_rows: 0,
+    };
+    let rows = merge_into_sink(&enabled, options, &plan, &mut sink, emit, cancel)?;
+    Ok(rows.map(|rows| (plan, rows)))
+}
+
+fn merge_into_sink<S: RowSink>(
+    tables: &[&SourceTable],
+    options: &MergeOptions,
+    plan: &OutputPlan,
+    sink: &mut S,
+    emit: &dyn Fn(u64, u64, String),
+    cancel: &AtomicBool,
+) -> Result<Option<u64>> {
+    match options.mode {
+        MergeMode::Consolidate => merge_consolidated(tables, options, plan, sink, emit, cancel),
+        MergeMode::Join => merge_joined(tables, options, plan, sink, emit, cancel),
+        _ => merge_appended(tables, options, plan, sink, emit, cancel),
+    }
+}
+
+fn merge_appended<S: RowSink>(
+    tables: &[&SourceTable],
+    options: &MergeOptions,
+    plan: &OutputPlan,
+    sink: &mut S,
+    emit: &dyn Fn(u64, u64, String),
+    cancel: &AtomicBool,
+) -> Result<Option<u64>> {
     let total = tables.iter().map(|table| table.estimated_rows).sum();
-    let mut sink = XlsxSink::new(plan.clone())?;
     let mut current = 0_u64;
     let mut dedup = HashSet::new();
-    let key_indices = key_indices(&plan, &options.key_columns);
+    let key_indices = key_indices(plan, &options.key_columns);
     let mut processed_workbooks = HashSet::<PathBuf>::new();
 
     for table in tables {
@@ -176,10 +225,10 @@ fn merge_appended(
                         table,
                         row,
                         options,
-                        &plan,
+                        plan,
                         &key_indices,
                         &mut dedup,
-                        &mut sink,
+                        sink,
                         &mut current,
                         total,
                         emit,
@@ -218,10 +267,10 @@ fn merge_appended(
                             sheet,
                             row.iter().map(CellValue::from_calamine).collect(),
                             options,
-                            &plan,
+                            plan,
                             &key_indices,
                             &mut dedup,
-                            &mut sink,
+                            sink,
                             &mut current,
                             total,
                             emit,
@@ -232,18 +281,18 @@ fn merge_appended(
             }
         }
     }
-    finish_sink(sink, output, current, cancel)
+    Ok(Some(current))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn consume_append_row(
+fn consume_append_row<S: RowSink>(
     table: &SourceTable,
     values: Vec<CellValue>,
     options: &MergeOptions,
     plan: &OutputPlan,
     key_indices: &[usize],
     dedup: &mut HashSet<String>,
-    sink: &mut XlsxSink,
+    sink: &mut S,
     current: &mut u64,
     total: u64,
     emit: &dyn Fn(u64, u64, String),
@@ -268,19 +317,19 @@ fn consume_append_row(
     Ok(())
 }
 
-fn merge_consolidated(
+fn merge_consolidated<S: RowSink>(
     tables: &[&SourceTable],
     options: &MergeOptions,
-    plan: OutputPlan,
-    output: &Path,
+    plan: &OutputPlan,
+    sink: &mut S,
     emit: &dyn Fn(u64, u64, String),
     cancel: &AtomicBool,
-) -> Result<Option<(u64, usize)>> {
-    let keys = key_indices(&plan, &options.key_columns);
+) -> Result<Option<u64>> {
+    let keys = key_indices(plan, &options.key_columns);
     if keys.is_empty() {
         return Err(anyhow!("按键汇总至少需要一个有效的键字段"));
     }
-    let operations = aggregate_operations(tables, &plan);
+    let operations = aggregate_operations(tables, plan);
     let mut groups = HashMap::<String, Vec<CellValue>>::new();
     let total = tables.iter().map(|table| table.estimated_rows).sum();
     let mut current = 0;
@@ -289,8 +338,8 @@ fn merge_consolidated(
             if cancel.load(Ordering::Relaxed) {
                 return Err(MergeCancelled.into());
             }
-            let row = mapped_row(table, values, options, &plan);
-            if passes_filter(&row, &plan, options) {
+            let row = mapped_row(table, values, options, plan);
+            if passes_filter(&row, plan, options) {
                 let key = row_key(&row, &keys);
                 groups
                     .entry(key)
@@ -307,25 +356,23 @@ fn merge_consolidated(
     if cancel.load(Ordering::Relaxed) {
         return Ok(None);
     }
-    let mut sink = XlsxSink::new(plan)?;
     let mut rows = groups.into_iter().collect::<Vec<_>>();
     rows.sort_by(|left, right| left.0.cmp(&right.0));
     for (_, row) in rows {
         sink.write_row(&row)?;
     }
-    let count = sink.total_rows;
-    finish_sink(sink, output, count, cancel)
+    Ok(Some(sink.total_rows()))
 }
 
-fn merge_joined(
+fn merge_joined<S: RowSink>(
     tables: &[&SourceTable],
     options: &MergeOptions,
-    plan: OutputPlan,
-    output: &Path,
+    plan: &OutputPlan,
+    sink: &mut S,
     emit: &dyn Fn(u64, u64, String),
     cancel: &AtomicBool,
-) -> Result<Option<(u64, usize)>> {
-    let keys = key_indices(&plan, &options.key_columns);
+) -> Result<Option<u64>> {
+    let keys = key_indices(plan, &options.key_columns);
     if keys.is_empty() {
         return Err(anyhow!("横向关联至少需要一个有效的键字段"));
     }
@@ -338,7 +385,7 @@ fn merge_joined(
             if cancel.load(Ordering::Relaxed) {
                 return Err(MergeCancelled.into());
             }
-            let row = mapped_row(table, values, options, &plan);
+            let row = mapped_row(table, values, options, plan);
             incoming
                 .entry(row_key(&row, &keys))
                 .and_modify(|existing| fill_empty(existing, &row))
@@ -375,14 +422,12 @@ fn merge_joined(
         return Ok(None);
     }
     current_rows.sort_by_key(|row| row_key(row, &keys));
-    let mut sink = XlsxSink::new(plan)?;
     for row in current_rows {
-        if passes_filter(&row, &sink.plan, options) {
+        if passes_filter(&row, plan, options) {
             sink.write_row(&row)?;
         }
     }
-    let count = sink.total_rows;
-    finish_sink(sink, output, count, cancel)
+    Ok(Some(sink.total_rows()))
 }
 
 fn for_each_table_row<F>(table: &SourceTable, mut callback: F) -> Result<()>
@@ -581,7 +626,7 @@ fn fill_empty(existing: &mut [CellValue], incoming: &[CellValue]) {
 
 fn send_progress(current: u64, total: u64, label: String, emit: &dyn Fn(u64, u64, String)) {
     if current.is_multiple_of(1_000) || current == total {
-        emit(current, total, format!("正在合并：{label}"));
+        emit(current, total, format!("正在处理：{label}"));
     }
 }
 
@@ -689,6 +734,40 @@ impl CellValue {
             Data::DateTimeIso(v) | Data::DurationIso(v) => Self::Text(v.clone()),
             Data::Error(v) => Self::Text(v.to_string()),
         }
+    }
+}
+
+trait RowSink {
+    fn write_row(&mut self, values: &[CellValue]) -> Result<()>;
+    fn total_rows(&self) -> u64;
+}
+
+struct CallbackSink<F> {
+    write_row: F,
+    empty_as_null: bool,
+    total_rows: u64,
+}
+
+impl<F> RowSink for CallbackSink<F>
+where
+    F: FnMut(Vec<Option<String>>) -> Result<()>,
+{
+    fn write_row(&mut self, values: &[CellValue]) -> Result<()> {
+        let row = values
+            .iter()
+            .map(|value| match value {
+                CellValue::Empty => None,
+                CellValue::Text(text) if self.empty_as_null && text.is_empty() => None,
+                other => Some(other.as_text()),
+            })
+            .collect();
+        (self.write_row)(row)?;
+        self.total_rows += 1;
+        Ok(())
+    }
+
+    fn total_rows(&self) -> u64 {
+        self.total_rows
     }
 }
 
@@ -806,6 +885,16 @@ impl XlsxSink {
         self.workbook
             .save(output)
             .with_context(|| format!("无法写入 {}，请确认文件未被 Excel 占用", output.display()))
+    }
+}
+
+impl RowSink for XlsxSink {
+    fn write_row(&mut self, values: &[CellValue]) -> Result<()> {
+        XlsxSink::write_row(self, values)
+    }
+
+    fn total_rows(&self) -> u64 {
+        self.total_rows
     }
 }
 
@@ -947,5 +1036,49 @@ mod tests {
             other => panic!("expected text fallback, got {other:?}"),
         }
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn database_row_stream_keeps_manual_headers_and_nulls() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("customers.csv");
+        std::fs::write(&path, "id,name\n001,张三\n002,\n").unwrap();
+        let headers = vec!["id".to_owned(), "name".to_owned()];
+        let mut mappings = crate::model::make_default_mappings(&headers);
+        mappings[0].target_name = "客户编号".to_owned();
+        mappings[1].target_name = "客户姓名".to_owned();
+        let table = SourceTable {
+            path,
+            sheet_name: "CSV".to_owned(),
+            kind: SourceKind::Csv { delimiter: b',' },
+            header_row: 1,
+            header_rows: 1,
+            suggested_header_row: 1,
+            headers,
+            estimated_rows: 2,
+            enabled: true,
+            mappings,
+        };
+        let options = MergeOptions {
+            mode: MergeMode::Manual,
+            ..MergeOptions::default()
+        };
+        let mut rows = Vec::new();
+        let result = stream_merged_rows(
+            &[table],
+            &options,
+            true,
+            &|_, _, _| {},
+            &AtomicBool::new(false),
+            |row| {
+                rows.push(row);
+                Ok(())
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.0.headers, ["客户编号", "客户姓名"]);
+        assert_eq!(rows[0], [Some("001".to_owned()), Some("张三".to_owned())]);
+        assert_eq!(rows[1], [Some("002".to_owned()), None]);
     }
 }

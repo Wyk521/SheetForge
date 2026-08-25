@@ -1,7 +1,7 @@
 // 引擎集成测试：真实文件 → 扫描 → 合并 → 读回输出逐格断言。
 // 覆盖刁钻场景：编码（BOM/GBK）、长数字保真、空文件、单列、多行表头、
 // 日期/布尔单元格、去重、筛选、三种关联、汇总求和、来源列、预检校验等。
-use crate::inspect::preflight;
+use crate::inspect::preflight_for_destination;
 use crate::merge::merge_tables;
 use crate::model::{AggregateOp, JoinKind, MergeMode, MergeOptions, SourceTable, TransformOp};
 use crate::scan::scan_file;
@@ -474,7 +474,7 @@ fn preflight_catches_missing_filter_column() {
         filter_text: "x".to_owned(),
         ..Default::default()
     };
-    let issues = preflight(&[table], &options);
+    let issues = preflight_for_destination(&[table], &options, false);
     assert!(
         issues.iter().any(|issue| issue.title == "筛选字段不存在"),
         "应报出筛选字段不存在的错误: {issues:?}"

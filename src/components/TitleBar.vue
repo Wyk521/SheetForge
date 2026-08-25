@@ -2,19 +2,20 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-const appWindow = getCurrentWindow();
+const isTauri = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+const appWindow = isTauri ? getCurrentWindow() : null;
 const isMax = ref(false);
 let unlisten: (() => void) | undefined;
 
 onMounted(async () => {
   try {
-    isMax.value = await appWindow.isMaximized();
+    isMax.value = (await appWindow?.isMaximized()) ?? false;
   } catch {
     /* 窗口 API 不可用时静默降级 */
   }
   try {
-    unlisten = await appWindow.onResized(() => {
-      void appWindow.isMaximized().then((v) => (isMax.value = v));
+    unlisten = await appWindow?.onResized(() => {
+      void appWindow?.isMaximized().then((v) => (isMax.value = v));
     });
   } catch {
     /* 忽略 */
@@ -32,7 +33,7 @@ onUnmounted(() => {
 
 <template>
   <div class="sf-titlebar">
-    <div class="sf-titlebar-drag" data-tauri-drag-region @dblclick="appWindow.toggleMaximize()">
+    <div class="sf-titlebar-drag" data-tauri-drag-region @dblclick="appWindow?.toggleMaximize()">
       <span class="sf-titlebar-title" data-tauri-drag-region>表格合并</span>
     </div>
     <div class="sf-titlebar-controls">
@@ -40,7 +41,7 @@ onUnmounted(() => {
         class="sf-win-btn"
         title="最小化"
         aria-label="最小化"
-        @click="appWindow.minimize()"
+        @click="appWindow?.minimize()"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <path d="M0 4.5h10v1H0z" fill="currentColor" />
@@ -50,7 +51,7 @@ onUnmounted(() => {
         class="sf-win-btn"
         :title="isMax ? '还原' : '最大化'"
         :aria-label="isMax ? '还原' : '最大化'"
-        @click="appWindow.toggleMaximize()"
+        @click="appWindow?.toggleMaximize()"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <path
@@ -66,7 +67,7 @@ onUnmounted(() => {
         class="sf-win-btn sf-win-close"
         title="关闭"
         aria-label="关闭"
-        @click="appWindow.close()"
+        @click="appWindow?.close()"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <path d="M1.4 0L5 3.6 8.6 0 10 1.4 6.4 5 10 8.6 8.6 10 5 6.4 1.4 10 0 8.6 3.6 5 0 1.4z" fill="currentColor" />

@@ -2,6 +2,7 @@
 
 mod commands;
 mod config;
+mod database;
 #[cfg(test)]
 mod engine_tests;
 mod inspect;
@@ -22,6 +23,10 @@ fn main() {
             commands::get_suggestions,
             commands::path_exists,
             commands::get_log_path,
+            commands::get_database_profiles,
+            commands::save_database_profile,
+            commands::delete_database_profile,
+            commands::test_database_connection,
             commands::save_text_file,
             commands::scan_folder,
             commands::scan_files,
@@ -31,6 +36,7 @@ fn main() {
             commands::preview_merged,
             commands::run_preflight,
             commands::start_merge,
+            commands::start_database_import,
             commands::cancel_merge,
             commands::save_scheme,
             commands::open_scheme,

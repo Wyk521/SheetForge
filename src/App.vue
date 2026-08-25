@@ -6,6 +6,8 @@ import TopBar from "./components/TopBar.vue";
 import TitleBar from "./components/TitleBar.vue";
 import BottomBar from "./components/BottomBar.vue";
 import AboutDialog from "./components/AboutDialog.vue";
+import DatabaseDialog from "./components/DatabaseDialog.vue";
+import DatabaseConnectionsDialog from "./components/DatabaseConnectionsDialog.vue";
 import DataSourceView from "./views/DataSourceView.vue";
 import MergeRulesView from "./views/MergeRulesView.vue";
 import PreviewView from "./views/PreviewView.vue";
@@ -28,6 +30,8 @@ function onKeyDown(event: KeyboardEvent) {
     void store.openScheme();
   } else if (event.key === "Escape") {
     store.showAbout = false;
+    store.showDatabaseDialog = false;
+    store.showDatabaseConnectionsDialog = false;
   }
 }
 
@@ -44,6 +48,9 @@ let unlistenDrop: (() => void) | undefined;
 onMounted(async () => {
   await store.initEvents();
   await store.loadState();
+  if (Object.keys(store.databaseProfiles).length === 0) {
+    store.openDatabaseConnections();
+  }
   await store.refreshPlan();
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("contextmenu", onContextMenu);
@@ -77,5 +84,7 @@ onUnmounted(() => {
     </div>
     <BottomBar />
     <AboutDialog />
+    <DatabaseDialog />
+    <DatabaseConnectionsDialog />
   </div>
 </template>

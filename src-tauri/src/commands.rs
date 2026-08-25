@@ -1,4 +1,5 @@
 use crate::config::{self, MergeScheme};
+use crate::database::{self, DatabaseImportRequest, DatabaseProfilesDto};
 use crate::inspect::{
     preview_merged as inspect_preview_merged, preview_source as inspect_preview_source,
     PreviewTable,
@@ -8,6 +9,8 @@ use crate::model::{build_output_plan, common_header_keys, MergeOptions, SourceTa
 use crate::scan::{
     collect_folder, spawn_group_reload, spawn_scan, spawn_table_reload, supported_file,
 };
+use pg_table_importer::config::ConnectionProfile;
+use pg_table_importer::postgres::connection::ConnectionInfo;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -75,6 +78,38 @@ pub fn path_exists(path: String) -> bool {
 #[tauri::command]
 pub fn get_log_path() -> String {
     config::log_path().display().to_string()
+}
+
+#[tauri::command]
+pub fn get_database_profiles() -> Result<DatabaseProfilesDto, String> {
+    database::get_profiles().map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn save_database_profile(
+    name: String,
+    profile: ConnectionProfile,
+    password: Option<String>,
+    remember_password: bool,
+) -> Result<Option<String>, String> {
+    database::save_profile(name, profile, password, remember_password)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn delete_database_profile(name: String) -> Result<(), String> {
+    database::delete_profile(name).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub async fn test_database_connection(
+    profile_name: Option<String>,
+    profile: ConnectionProfile,
+    password: Option<String>,
+) -> Result<ConnectionInfo, String> {
+    database::test_connection(profile_name, profile, password)
+        .await
+        .map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]
@@ -162,8 +197,15 @@ pub fn run_preflight(
     tables: Vec<SourceTable>,
     options: MergeOptions,
     continues_merge: bool,
+    destination: Option<String>,
 ) {
-    spawn_preflight(tables, options, continues_merge, app);
+    spawn_preflight(
+        tables,
+        options,
+        continues_merge,
+        destination.as_deref() == Some("postgres"),
+        app,
+    );
 }
 
 #[tauri::command]
@@ -196,6 +238,32 @@ pub fn start_merge(
         output.display()
     ));
     spawn_merge(tables, options, output, app, cancel);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn start_database_import(
+    app: AppHandle,
+    state: State<'_, Mutex<AppState>>,
+    tables: Vec<SourceTable>,
+    options: MergeOptions,
+    request: DatabaseImportRequest,
+) -> Result<(), String> {
+    if request.profile_name.trim().is_empty() {
+        return Err("请先选择数据库连接".to_owned());
+    }
+    let cancel = {
+        let mut app_state = state.lock().map_err(|error| error.to_string())?;
+        app_state.cancel = Arc::new(AtomicBool::new(false));
+        app_state.cancel.clone()
+    };
+    config::append_log(&format!(
+        "开始导入数据库：{} 个数据表 -> {}.{}",
+        tables.iter().filter(|table| table.enabled).count(),
+        request.schema,
+        request.table
+    ));
+    database::spawn_database_import(tables, options, request, app, cancel);
     Ok(())
 }
 
