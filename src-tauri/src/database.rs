@@ -1,4 +1,4 @@
-use crate::merge::{stream_merged_rows, MergeFailedDto, MergeProgressDto};
+use crate::merge::{stream_merged_cells, MergeFailedDto, MergeProgressDto};
 use crate::model::{build_output_plan, MergeOptions, SourceTable};
 use crate::pg_import::{
     config::{self as pg_config, AppConfig, ConnectionProfile},
@@ -9,8 +9,10 @@ use crate::pg_import::{
     },
     schema::identifier::{map_identifiers, quote_identifier},
     transform::{
-        copy_binary_encoder::{encode_binary_header, encode_binary_row, encode_binary_trailer},
-        copy_encoder::encode_copy_row_into,
+        copy_binary_encoder::{
+            encode_binary_cells_row, encode_binary_header, encode_binary_trailer,
+        },
+        copy_encoder::encode_copy_cells_row_into,
     },
 };
 use anyhow::{anyhow, Result};
@@ -354,18 +356,17 @@ async fn import_database(
             Ok(())
         };
 
-        let merged = stream_merged_rows(
-            &tables,
-            &options,
-            request.empty_as_null,
-            &|_, _, _| {},
-            &producer_cancel,
-            |row| {
+        let merged =
+            stream_merged_cells(&tables, &options, &|_, _, _| {}, &producer_cancel, |row| {
                 let before = buffer.len();
                 match copy_format {
-                    CopyFormat::Binary => encode_binary_row(&row, &mut buffer)
-                        .map_err(|error| anyhow!(error.to_string()))?,
-                    CopyFormat::Text => encode_copy_row_into(&row, &mut buffer),
+                    CopyFormat::Binary => {
+                        encode_binary_cells_row(row, request.empty_as_null, &mut buffer)
+                            .map_err(|error| anyhow!(error.to_string()))?
+                    }
+                    CopyFormat::Text => {
+                        encode_copy_cells_row_into(row, request.empty_as_null, &mut buffer)
+                    }
                 }
                 bytes += (buffer.len() - before) as u64;
                 rows += 1;
@@ -373,8 +374,7 @@ async fn import_database(
                     send_batch(&mut buffer, rows)?;
                 }
                 Ok(())
-            },
-        )?;
+            })?;
 
         let merged_rows = merged.map(|(_, rows)| rows);
         if merged_rows.is_some() {

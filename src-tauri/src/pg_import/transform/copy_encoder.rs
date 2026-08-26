@@ -1,3 +1,5 @@
+use crate::merge::CellValue;
+
 pub fn encode_copy_field(value: Option<&str>, output: &mut Vec<u8>) {
     let Some(value) = value else {
         output.extend_from_slice(br"\N");
@@ -28,6 +30,17 @@ pub fn encode_copy_row_into(values: &[Option<String>], output: &mut Vec<u8>) {
             output.push(b'\t');
         }
         encode_copy_field(value.as_deref(), output);
+    }
+    output.push(b'\n');
+}
+
+pub fn encode_copy_cells_row_into(values: &[CellValue], empty_as_null: bool, output: &mut Vec<u8>) {
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            output.push(b'\t');
+        }
+        let text = value.copy_text(empty_as_null);
+        encode_copy_field(text.as_deref(), output);
     }
     output.push(b'\n');
 }
@@ -71,6 +84,20 @@ mod tests {
         encode_copy_row_into(&[Some("2".into()), None], &mut output);
         assert_eq!(String::from_utf8(output).unwrap(), "1\t甲\n2\t\\N\n");
     }
+
+    #[test]
+    fn encodes_cell_values_with_the_same_copy_text_semantics() {
+        let row = vec![
+            CellValue::Text("001".into()),
+            CellValue::Empty,
+            CellValue::Integer(42),
+            CellValue::Text(String::new()),
+        ];
+        let mut output = Vec::new();
+        encode_copy_cells_row_into(&row, true, &mut output);
+        assert_eq!(String::from_utf8(output).unwrap(), "001\t\\N\t42\t\\N\n");
+    }
+
     #[test]
     fn distinguishes_null_empty_and_literal_null_words() {
         let row = vec![

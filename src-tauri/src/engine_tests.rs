@@ -184,6 +184,15 @@ fn multi_row_header_workbook_merges() {
 }
 
 #[test]
+fn blank_xlsx_rows_are_not_sent_to_database_or_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_workbook(&dir, "sparse.xlsx", &[&["id"], &["a"], &[], &["b"]]);
+    let table = scan_workbook_sheet(&path, "Sheet1");
+    let rows = merge_and_read(vec![table], MergeOptions::default());
+    assert_eq!(rows, vec![vec!["id"], vec!["a"], vec!["b"]]);
+}
+
+#[test]
 fn date_and_boolean_cells_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("types.xlsx");
@@ -478,6 +487,17 @@ fn preflight_catches_missing_filter_column() {
     assert!(
         issues.iter().any(|issue| issue.title == "筛选字段不存在"),
         "应报出筛选字段不存在的错误: {issues:?}"
+    );
+}
+
+#[test]
+fn database_preflight_skips_text_type_sampling() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(&dir, "mixed.csv", "值\n1\n文本\n");
+    let issues = preflight_for_destination(&[table], &MergeOptions::default(), true);
+    assert!(
+        !issues.iter().any(|issue| issue.title == "字段类型混合"),
+        "TEXT 目标不应为样本类型混合增加检查: {issues:?}"
     );
 }
 

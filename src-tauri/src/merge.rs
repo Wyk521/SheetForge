@@ -8,6 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use calamine::{open_workbook, open_workbook_auto, Data, Reader, Xlsx};
 use rust_xlsxwriter::{Color, ExcelDateTime, Format, FormatAlign, FormatBorder, Workbook};
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
@@ -156,6 +157,7 @@ pub(crate) fn merge_tables(
 
 /// 将 SheetForge 已应用表头修改、交并集、清洗、汇总或关联后的最终行流交给调用方。
 /// PostgreSQL 适配层使用此入口，确保数据库与 XLSX 得到完全相同的业务数据。
+#[cfg(test)]
 pub(crate) fn stream_merged_rows<F>(
     tables: &[SourceTable],
     options: &MergeOptions,
@@ -166,6 +168,31 @@ pub(crate) fn stream_merged_rows<F>(
 ) -> Result<Option<(OutputPlan, u64)>>
 where
     F: FnMut(Vec<Option<String>>) -> Result<()>,
+{
+    let mut write_row = write_row;
+    stream_merged_cells(tables, options, emit, cancel, |values| {
+        let row = values
+            .iter()
+            .map(|value| match value {
+                CellValue::Empty => None,
+                CellValue::Text(text) if empty_as_null && text.is_empty() => None,
+                other => Some(other.as_text()),
+            })
+            .collect();
+        write_row(row)
+    })
+}
+
+/// 将最终合并行直接交给调用方，避免数据库导入先把每个单元格复制成 String。
+pub(crate) fn stream_merged_cells<F>(
+    tables: &[SourceTable],
+    options: &MergeOptions,
+    emit: &dyn Fn(u64, u64, String),
+    cancel: &AtomicBool,
+    write_row: F,
+) -> Result<Option<(OutputPlan, u64)>>
+where
+    F: FnMut(&[CellValue]) -> Result<()>,
 {
     let enabled = tables
         .iter()
@@ -178,9 +205,8 @@ where
     if plan.headers.is_empty() {
         return Err(anyhow!("合并后没有可导入的列，请检查合并方式或字段映射"));
     }
-    let mut sink = CallbackSink {
+    let mut sink = CellCallbackSink {
         write_row,
-        empty_as_null,
         total_rows: 0,
     };
     let rows = merge_into_sink(&enabled, options, &plan, &mut sink, emit, cancel)?;
@@ -346,6 +372,9 @@ fn consume_append_row<S: RowSink>(
     if cancel.load(Ordering::Relaxed) {
         return Err(MergeCancelled.into());
     }
+    if is_blank_source_row(table.kind, &values) {
+        return Ok(());
+    }
     let output_row = mapped_row(values, row_mapping, plan);
     if !passes_filter(&output_row, plan, options) {
         return Ok(());
@@ -481,13 +510,20 @@ fn for_each_table_row<F>(table: &SourceTable, mut callback: F) -> Result<()>
 where
     F: FnMut(Vec<CellValue>) -> Result<()>,
 {
+    let mut emit_non_empty = |values: Vec<CellValue>| {
+        if is_blank_source_row(table.kind, &values) {
+            Ok(())
+        } else {
+            callback(values)
+        }
+    };
     match table.kind {
         SourceKind::Csv { delimiter } => for_each_csv_row(
             &table.path,
             delimiter,
             table.header_row,
             table.header_rows,
-            |row| callback(row.into_iter().map(CellValue::Text).collect()),
+            |row| emit_non_empty(row.into_iter().map(CellValue::Text).collect()),
         ),
         SourceKind::Workbook => {
             if is_xlsx_path(&table.path) {
@@ -497,18 +533,25 @@ where
                     &table.sheet_name,
                     table.header_row + table.header_rows - 1,
                     None,
-                    |row| callback(row.iter().map(CellValue::from_calamine).collect()),
+                    |row| emit_non_empty(row.iter().map(CellValue::from_calamine).collect()),
                 )?;
                 Ok(())
             } else {
                 let mut workbook = open_workbook_auto(&table.path)?;
                 let range = workbook.worksheet_range(&table.sheet_name)?;
                 for row in range.rows().skip(table.header_row + table.header_rows - 1) {
-                    callback(row.iter().map(CellValue::from_calamine).collect())?;
+                    emit_non_empty(row.iter().map(CellValue::from_calamine).collect())?;
                 }
                 Ok(())
             }
         }
+    }
+}
+
+fn is_blank_source_row(kind: SourceKind, values: &[CellValue]) -> bool {
+    match kind {
+        SourceKind::Csv { .. } => values.iter().all(CellValue::is_empty),
+        SourceKind::Workbook => values.iter().all(|value| matches!(value, CellValue::Empty)),
     }
 }
 
@@ -746,7 +789,7 @@ fn finish_sink(
 }
 
 #[derive(Clone, Debug)]
-enum CellValue {
+pub(crate) enum CellValue {
     Empty,
     Text(String),
     Integer(i64),
@@ -767,13 +810,14 @@ impl CellValue {
     fn is_empty(&self) -> bool {
         matches!(self, Self::Empty) || matches!(self, Self::Text(value) if value.is_empty())
     }
-    fn as_text(&self) -> String {
+    pub(crate) fn copy_text(&self, empty_as_null: bool) -> Option<Cow<'_, str>> {
         match self {
-            Self::Empty => String::new(),
-            Self::Text(v) => v.clone(),
-            Self::Integer(v) => v.to_string(),
-            Self::Number(v) => v.to_string(),
-            Self::Boolean(v) => v.to_string(),
+            Self::Empty => None,
+            Self::Text(v) if empty_as_null && v.is_empty() => None,
+            Self::Text(v) => Some(Cow::Borrowed(v)),
+            Self::Integer(v) => Some(Cow::Owned(v.to_string())),
+            Self::Number(v) => Some(Cow::Owned(v.to_string())),
+            Self::Boolean(v) => Some(Cow::Owned(v.to_string())),
             Self::DateTime {
                 year,
                 month,
@@ -782,7 +826,7 @@ impl CellValue {
                 minute,
                 second,
             } if *hour == 0 && *minute == 0 && *second == 0 => {
-                format!("{year:04}-{month:02}-{day:02}")
+                Some(Cow::Owned(format!("{year:04}-{month:02}-{day:02}")))
             }
             Self::DateTime {
                 year,
@@ -791,8 +835,15 @@ impl CellValue {
                 hour,
                 minute,
                 second,
-            } => format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"),
+            } => Some(Cow::Owned(format!(
+                "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"
+            ))),
         }
+    }
+    fn as_text(&self) -> String {
+        self.copy_text(false)
+            .map(Cow::into_owned)
+            .unwrap_or_default()
     }
     fn as_number(&self) -> Option<f64> {
         match self {
@@ -843,26 +894,17 @@ trait RowSink {
     fn total_rows(&self) -> u64;
 }
 
-struct CallbackSink<F> {
+struct CellCallbackSink<F> {
     write_row: F,
-    empty_as_null: bool,
     total_rows: u64,
 }
 
-impl<F> RowSink for CallbackSink<F>
+impl<F> RowSink for CellCallbackSink<F>
 where
-    F: FnMut(Vec<Option<String>>) -> Result<()>,
+    F: FnMut(&[CellValue]) -> Result<()>,
 {
     fn write_row(&mut self, values: &[CellValue]) -> Result<()> {
-        let row = values
-            .iter()
-            .map(|value| match value {
-                CellValue::Empty => None,
-                CellValue::Text(text) if self.empty_as_null && text.is_empty() => None,
-                other => Some(other.as_text()),
-            })
-            .collect();
-        (self.write_row)(row)?;
+        (self.write_row)(values)?;
         self.total_rows += 1;
         Ok(())
     }
@@ -1179,7 +1221,7 @@ mod tests {
     fn database_row_stream_keeps_manual_headers_and_nulls() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("customers.csv");
-        std::fs::write(&path, "id,name\n001,张三\n002,\n").unwrap();
+        std::fs::write(&path, "id,name\n,\n001,张三\n002,\n").unwrap();
         let headers = vec!["id".to_owned(), "name".to_owned()];
         let mut mappings = crate::model::make_default_mappings(&headers);
         mappings[0].target_name = "客户编号".to_owned();
@@ -1192,7 +1234,7 @@ mod tests {
             header_rows: 1,
             suggested_header_row: 1,
             headers,
-            estimated_rows: 2,
+            estimated_rows: 3,
             enabled: true,
             mappings,
         };
@@ -1215,6 +1257,7 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(result.0.headers, ["客户编号", "客户姓名"]);
+        assert_eq!(rows.len(), 2);
         assert_eq!(rows[0], [Some("001".to_owned()), Some("张三".to_owned())]);
         assert_eq!(rows[1], [Some("002".to_owned()), None]);
     }

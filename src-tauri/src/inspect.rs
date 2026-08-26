@@ -246,61 +246,67 @@ pub fn preflight_for_destination(
             }
         }
     }
-    let mut sampled_types = HashMap::<String, HashSet<&'static str>>::new();
-    let mut non_empty_counts = HashMap::<String, usize>::new();
-    for table in &enabled {
-        match preview_source(table, 100) {
-            Ok(preview) => {
-                for (column, header) in preview.headers.iter().enumerate() {
-                    let key = header_key(header);
-                    for row in &preview.rows {
-                        let value = row
-                            .get(column)
-                            .map(|value| value.trim())
-                            .unwrap_or_default();
-                        if value.is_empty() {
-                            continue;
+    // PostgreSQL 目标表的列统一创建为 TEXT NULL，样本类型和“样本全空”
+    // 对数据库导入没有决策价值；老 pg 导入器也不会在正式 COPY 前重复抽样。
+    // 跳过这一步后，数据库预检查只做元数据、表头和 CSV 结构校验，避免导入前
+    // 再打开并读取每个 XLSX 工作表。
+    if !database {
+        let mut sampled_types = HashMap::<String, HashSet<&'static str>>::new();
+        let mut non_empty_counts = HashMap::<String, usize>::new();
+        for table in &enabled {
+            match preview_source(table, 100) {
+                Ok(preview) => {
+                    for (column, header) in preview.headers.iter().enumerate() {
+                        let key = header_key(header);
+                        for row in &preview.rows {
+                            let value = row
+                                .get(column)
+                                .map(|value| value.trim())
+                                .unwrap_or_default();
+                            if value.is_empty() {
+                                continue;
+                            }
+                            *non_empty_counts.entry(key.clone()).or_default() += 1;
+                            let kind = if value.parse::<f64>().is_ok() {
+                                "数字"
+                            } else if matches!(
+                                value.to_lowercase().as_str(),
+                                "true" | "false" | "是" | "否"
+                            ) {
+                                "布尔"
+                            } else {
+                                "文本"
+                            };
+                            sampled_types.entry(key.clone()).or_default().insert(kind);
                         }
-                        *non_empty_counts.entry(key.clone()).or_default() += 1;
-                        let kind = if value.parse::<f64>().is_ok() {
-                            "数字"
-                        } else if matches!(
-                            value.to_lowercase().as_str(),
-                            "true" | "false" | "是" | "否"
-                        ) {
-                            "布尔"
-                        } else {
-                            "文本"
-                        };
-                        sampled_types.entry(key.clone()).or_default().insert(kind);
                     }
                 }
+                Err(error) => issues.push(issue(
+                    IssueLevel::Error,
+                    "无法抽样读取",
+                    &format!("{}：{error:#}", table.display_name()),
+                )),
             }
-            Err(error) => issues.push(issue(
-                IssueLevel::Error,
-                "无法抽样读取",
-                &format!("{}：{error:#}", table.display_name()),
-            )),
         }
-    }
-    for (column, kinds) in sampled_types {
-        if kinds.len() > 1 {
-            let mut kinds = kinds.into_iter().collect::<Vec<_>>();
-            kinds.sort();
-            issues.push(issue(
-                IssueLevel::Warning,
-                "字段类型混合",
-                &format!("字段“{column}”的样本同时出现：{}。", kinds.join("、")),
-            ));
+        for (column, kinds) in sampled_types {
+            if kinds.len() > 1 {
+                let mut kinds = kinds.into_iter().collect::<Vec<_>>();
+                kinds.sort();
+                issues.push(issue(
+                    IssueLevel::Warning,
+                    "字段类型混合",
+                    &format!("字段“{column}”的样本同时出现：{}。", kinds.join("、")),
+                ));
+            }
         }
-    }
-    for column in &union {
-        if !non_empty_counts.contains_key(column) {
-            issues.push(issue(
-                IssueLevel::Warning,
-                "字段样本全空",
-                &format!("字段“{column}”在抽样行中没有非空值。"),
-            ));
+        for column in &union {
+            if !non_empty_counts.contains_key(column) {
+                issues.push(issue(
+                    IssueLevel::Warning,
+                    "字段样本全空",
+                    &format!("字段“{column}”在抽样行中没有非空值。"),
+                ));
+            }
         }
     }
     let mut similar = Vec::new();
