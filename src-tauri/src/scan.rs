@@ -1,6 +1,6 @@
 use crate::model::{make_default_mappings, normalize_headers, SourceKind, SourceTable};
 use anyhow::{Context, Result};
-use calamine::{open_workbook_auto, Data, Reader};
+use calamine::{open_workbook, open_workbook_auto, Data, Dimensions, Reader, Xlsx};
 use csv::{ByteRecord, ReaderBuilder};
 use encoding_rs::GBK;
 use serde::Serialize;
@@ -67,6 +67,94 @@ pub fn supported_file(path: &Path) -> bool {
             .as_deref(),
         Some("csv" | "tsv" | "xlsx" | "xlsm" | "xls" | "xlsb" | "ods")
     )
+}
+
+pub(crate) fn is_xlsx_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("xlsx" | "xlsm" | "xlam")
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct XlsxStreamBounds {
+    pub(crate) declared: Dimensions,
+    pub(crate) actual_start: Option<(u32, u32)>,
+}
+
+/// Read an XLSX worksheet one row at a time without materializing the full Range.
+/// `row_offset` is relative to the first used row, matching `Range::rows().skip(...)`.
+pub(crate) fn for_each_xlsx_row<F>(
+    workbook: &mut Xlsx<BufReader<File>>,
+    sheet_name: &str,
+    row_offset: usize,
+    max_rows: Option<usize>,
+    mut callback: F,
+) -> Result<XlsxStreamBounds>
+where
+    F: FnMut(Vec<Data>) -> Result<()>,
+{
+    let mut reader = workbook
+        .worksheet_cells_reader(sheet_name)
+        .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
+    let declared = reader.dimensions();
+    let max_rows = max_rows.unwrap_or(usize::MAX);
+    if max_rows == 0 {
+        return Ok(XlsxStreamBounds {
+            declared,
+            actual_start: None,
+        });
+    }
+
+    let mut actual_start = None;
+    let mut target_row = None;
+    let mut next_row = 0_u32;
+    let mut current = Vec::<Data>::new();
+    let mut emitted = 0_usize;
+
+    while let Some(cell) = reader.next_cell()? {
+        let (row, column) = cell.get_position();
+        if actual_start.is_none() {
+            actual_start = Some((row, column));
+            target_row = Some(row.saturating_add(row_offset as u32));
+            next_row = target_row.unwrap_or(row);
+        }
+        let target_row = target_row.expect("XLSX stream target row must be initialized");
+        if row < target_row {
+            continue;
+        }
+
+        while next_row < row {
+            callback(std::mem::take(&mut current))?;
+            emitted += 1;
+            if emitted >= max_rows {
+                return Ok(XlsxStreamBounds {
+                    declared,
+                    actual_start,
+                });
+            }
+            next_row = next_row.saturating_add(1);
+        }
+
+        let base_column = actual_start.map(|(_, column)| column).unwrap_or(column);
+        let relative_column = column.saturating_sub(base_column) as usize;
+        if current.len() <= relative_column {
+            current.resize(relative_column + 1, Data::Empty);
+        }
+        current[relative_column] = Data::from(cell.get_value().clone());
+    }
+
+    if actual_start.is_some() && !current.is_empty() {
+        callback(current)?;
+    }
+
+    Ok(XlsxStreamBounds {
+        declared,
+        actual_start,
+    })
 }
 
 pub fn collect_folder(folder: &Path) -> Vec<PathBuf> {
@@ -172,9 +260,8 @@ pub fn scan_file(path: &Path) -> Result<(Vec<SourceTable>, Vec<String>)> {
             }
             Ok((vec![table], warnings))
         }
-        Some("xlsx" | "xlsm" | "xls" | "xlsb" | "ods") => {
-            Ok((scan_workbook_auto_headers(path)?, Vec::new()))
-        }
+        Some("xlsx" | "xlsm") => Ok((scan_xlsx_auto_headers(path)?, Vec::new())),
+        Some("xls" | "xlsb" | "ods") => Ok((scan_workbook_auto_headers(path)?, Vec::new())),
         _ => Ok((Vec::new(), Vec::new())),
     }
 }
@@ -391,6 +478,47 @@ fn scan_workbook_auto_headers(path: &Path) -> Result<Vec<SourceTable>> {
     Ok(result)
 }
 
+fn scan_xlsx_auto_headers(path: &Path) -> Result<Vec<SourceTable>> {
+    let mut workbook: Xlsx<BufReader<File>> =
+        open_workbook(path).with_context(|| "无法打开工作簿")?;
+    let mut result = Vec::new();
+    for sheet_name in workbook.sheet_names().to_vec() {
+        let mut sample_rows = Vec::new();
+        let bounds = for_each_xlsx_row(
+            &mut workbook,
+            &sheet_name,
+            0,
+            Some(AUTO_HEADER_ROWS),
+            |row| {
+                sample_rows.push(row.iter().map(Data::to_string).collect::<Vec<_>>());
+                Ok(())
+            },
+        )?;
+        if sample_rows.is_empty() {
+            continue;
+        }
+        let suggested = recommend_header(sample_rows.clone()) + 1;
+        let header_parts = sample_rows
+            .iter()
+            .skip(suggested - 1)
+            .take(1)
+            .cloned()
+            .collect::<Vec<_>>();
+        let headers = combine_header_rows(&header_parts);
+        let estimated_rows = xlsx_estimated_rows(&bounds, suggested);
+        result.push(source_table_from_headers(
+            path,
+            sheet_name,
+            suggested,
+            1,
+            suggested,
+            headers,
+            estimated_rows,
+        ));
+    }
+    Ok(result)
+}
+
 fn scan_workbook_sheet(
     path: &Path,
     sheet_name: &str,
@@ -398,6 +526,18 @@ fn scan_workbook_sheet(
     header_rows: usize,
     suggested_header_row: usize,
 ) -> Result<SourceTable> {
+    if is_xlsx_path(path) {
+        let mut workbook: Xlsx<BufReader<File>> =
+            open_workbook(path).with_context(|| "无法打开工作簿")?;
+        return scan_xlsx_sheet(
+            &mut workbook,
+            path,
+            sheet_name,
+            header_row,
+            header_rows,
+            suggested_header_row,
+        );
+    }
     let mut workbook = open_workbook_auto(path).with_context(|| "无法打开工作簿")?;
     let range = workbook
         .worksheet_range(sheet_name)
@@ -413,6 +553,46 @@ fn scan_workbook_sheet(
         header_row,
         header_rows,
         suggested_header_row,
+    ))
+}
+
+fn scan_xlsx_sheet(
+    workbook: &mut Xlsx<BufReader<File>>,
+    path: &Path,
+    sheet_name: &str,
+    header_row: usize,
+    header_rows: usize,
+    suggested_header_row: usize,
+) -> Result<SourceTable> {
+    let header_row = header_row.max(1);
+    let header_rows = header_rows.clamp(1, 3);
+    let mut parts = Vec::new();
+    let bounds = for_each_xlsx_row(
+        workbook,
+        sheet_name,
+        header_row - 1,
+        Some(header_rows),
+        |row| {
+            parts.push(row.iter().map(Data::to_string).collect::<Vec<_>>());
+            Ok(())
+        },
+    )?;
+    if parts.len() < header_rows {
+        anyhow::bail!(
+            "工作表不足 {} 行，无法读取多行表头",
+            header_row + header_rows - 1
+        );
+    }
+    let headers = combine_header_rows(&parts);
+    let estimated_rows = xlsx_estimated_rows(&bounds, header_row + header_rows - 1);
+    Ok(source_table_from_headers(
+        path,
+        sheet_name.to_owned(),
+        header_row,
+        header_rows,
+        suggested_header_row,
+        headers,
+        estimated_rows,
     ))
 }
 
@@ -433,18 +613,51 @@ fn table_from_range(
         .map(|row| row.iter().map(Data::to_string).collect::<Vec<_>>())
         .collect::<Vec<_>>();
     let headers = combine_header_rows(&parts);
+    source_table_from_headers(
+        path,
+        sheet_name,
+        header_row,
+        header_rows,
+        suggested_header_row,
+        headers,
+        range.height().saturating_sub(header_row + header_rows - 1) as u64,
+    )
+}
+
+fn source_table_from_headers(
+    path: &Path,
+    sheet_name: String,
+    header_row: usize,
+    header_rows: usize,
+    suggested_header_row: usize,
+    headers: Vec<String>,
+    estimated_rows: u64,
+) -> SourceTable {
     SourceTable {
         path: path.to_owned(),
         sheet_name,
         kind: SourceKind::Workbook,
-        header_row,
-        header_rows,
+        header_row: header_row.max(1),
+        header_rows: header_rows.clamp(1, 3),
         suggested_header_row: suggested_header_row.max(1),
         mappings: make_default_mappings(&headers),
         headers,
-        estimated_rows: range.height().saturating_sub(header_row + header_rows - 1) as u64,
+        estimated_rows,
         enabled: true,
     }
+}
+
+fn xlsx_estimated_rows(bounds: &XlsxStreamBounds, rows_before_data: usize) -> u64 {
+    let Some((start_row, _)) = bounds.actual_start else {
+        return 0;
+    };
+    let height = bounds
+        .declared
+        .end
+        .0
+        .saturating_sub(start_row)
+        .saturating_add(1) as usize;
+    height.saturating_sub(rows_before_data) as u64
 }
 
 fn combine_header_rows(rows: &[Vec<String>]) -> Vec<String> {
@@ -716,6 +929,40 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("编码可能不是 UTF-8 或 GBK")),
             "warnings: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn xlsx_scan_and_rows_use_streaming_cells() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sparse.xlsx");
+        let mut workbook = rust_xlsxwriter::Workbook::new();
+        let worksheet = workbook.add_worksheet();
+        worksheet.write_string(0, 0, "id").unwrap();
+        worksheet.write_string(1, 0, "a").unwrap();
+        worksheet.write_string(3, 0, "c").unwrap();
+        workbook.save(&path).unwrap();
+
+        let (tables, warnings) = scan_file(&path).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].headers, vec!["id"]);
+        assert_eq!(tables[0].estimated_rows, 3);
+
+        let mut workbook: Xlsx<BufReader<File>> = open_workbook(&path).unwrap();
+        let mut rows = Vec::new();
+        for_each_xlsx_row(&mut workbook, "Sheet1", 1, None, |row| {
+            rows.push(row.iter().map(Data::to_string).collect::<Vec<_>>());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec!["a".to_owned()],
+                Vec::<String>::new(),
+                vec!["c".to_owned()]
+            ]
         );
     }
 }

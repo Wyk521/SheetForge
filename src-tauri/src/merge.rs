@@ -3,12 +3,14 @@ use crate::model::{
     build_output_plan, header_key, source_to_output_map, AggregateOp, JoinKind, MergeMode,
     MergeOptions, OutputPlan, SourceKind, SourceTable, TransformOp,
 };
-use crate::scan::for_each_csv_row;
+use crate::scan::{for_each_csv_row, for_each_xlsx_row, is_xlsx_path};
 use anyhow::{anyhow, Context, Result};
-use calamine::{open_workbook_auto, Data, Reader};
+use calamine::{open_workbook, open_workbook_auto, Data, Reader, Xlsx};
 use rust_xlsxwriter::{Color, ExcelDateTime, Format, FormatAlign, FormatBorder, Workbook};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -193,15 +195,24 @@ fn merge_into_sink<S: RowSink>(
     emit: &dyn Fn(u64, u64, String),
     cancel: &AtomicBool,
 ) -> Result<Option<u64>> {
+    // 这些映射只依赖于表头和用户配置。之前每一行都会重新构建哈希表、
+    // 规范化表头并查找转换规则，在百万行数据上会把纯粹的配置开销放大数亿次。
+    let row_mappings = tables
+        .iter()
+        .map(|table| build_row_mapping(table, plan, options.mode))
+        .collect::<Vec<_>>();
     match options.mode {
-        MergeMode::Consolidate => merge_consolidated(tables, options, plan, sink, emit, cancel),
-        MergeMode::Join => merge_joined(tables, options, plan, sink, emit, cancel),
-        _ => merge_appended(tables, options, plan, sink, emit, cancel),
+        MergeMode::Consolidate => {
+            merge_consolidated(tables, &row_mappings, options, plan, sink, emit, cancel)
+        }
+        MergeMode::Join => merge_joined(tables, &row_mappings, options, plan, sink, emit, cancel),
+        _ => merge_appended(tables, &row_mappings, options, plan, sink, emit, cancel),
     }
 }
 
 fn merge_appended<S: RowSink>(
     tables: &[&SourceTable],
+    row_mappings: &[RowMapping],
     options: &MergeOptions,
     plan: &OutputPlan,
     sink: &mut S,
@@ -214,7 +225,7 @@ fn merge_appended<S: RowSink>(
     let key_indices = key_indices(plan, &options.key_columns);
     let mut processed_workbooks = HashSet::<PathBuf>::new();
 
-    for table in tables {
+    for (table_index, table) in tables.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
@@ -224,6 +235,7 @@ fn merge_appended<S: RowSink>(
                     consume_append_row(
                         table,
                         row,
+                        &row_mappings[table_index],
                         options,
                         plan,
                         &key_indices,
@@ -250,32 +262,64 @@ fn merge_appended<S: RowSink>(
                 }
                 let same_file = tables
                     .iter()
-                    .copied()
-                    .filter(|candidate| {
+                    .enumerate()
+                    .filter(|(_, candidate)| {
                         matches!(candidate.kind, SourceKind::Workbook)
                             && candidate.path == table.path
                     })
+                    .map(|(index, candidate)| (index, *candidate))
                     .collect::<Vec<_>>();
-                let mut workbook = open_workbook_auto(&table.path)
-                    .with_context(|| format!("无法打开 {}", table.path.display()))?;
-                for sheet in same_file {
-                    let range = workbook
-                        .worksheet_range(&sheet.sheet_name)
-                        .with_context(|| format!("无法读取 {}", sheet.display_name()))?;
-                    for row in range.rows().skip(sheet.header_row + sheet.header_rows - 1) {
-                        consume_append_row(
-                            sheet,
-                            row.iter().map(CellValue::from_calamine).collect(),
-                            options,
-                            plan,
-                            &key_indices,
-                            &mut dedup,
-                            sink,
-                            &mut current,
-                            total,
-                            emit,
-                            cancel,
-                        )?;
+                if is_xlsx_path(&table.path) {
+                    let mut workbook: Xlsx<BufReader<File>> = open_workbook(&table.path)
+                        .with_context(|| format!("无法打开 {}", table.path.display()))?;
+                    for (sheet_index, sheet) in same_file {
+                        for_each_xlsx_row(
+                            &mut workbook,
+                            &sheet.sheet_name,
+                            sheet.header_row + sheet.header_rows - 1,
+                            None,
+                            |row| {
+                                consume_append_row(
+                                    sheet,
+                                    row.iter().map(CellValue::from_calamine).collect(),
+                                    &row_mappings[sheet_index],
+                                    options,
+                                    plan,
+                                    &key_indices,
+                                    &mut dedup,
+                                    sink,
+                                    &mut current,
+                                    total,
+                                    emit,
+                                    cancel,
+                                )
+                            },
+                        )
+                        .with_context(|| format!("处理 {} 时失败", sheet.display_name()))?;
+                    }
+                } else {
+                    let mut workbook = open_workbook_auto(&table.path)
+                        .with_context(|| format!("无法打开 {}", table.path.display()))?;
+                    for (sheet_index, sheet) in same_file {
+                        let range = workbook
+                            .worksheet_range(&sheet.sheet_name)
+                            .with_context(|| format!("无法读取 {}", sheet.display_name()))?;
+                        for row in range.rows().skip(sheet.header_row + sheet.header_rows - 1) {
+                            consume_append_row(
+                                sheet,
+                                row.iter().map(CellValue::from_calamine).collect(),
+                                &row_mappings[sheet_index],
+                                options,
+                                plan,
+                                &key_indices,
+                                &mut dedup,
+                                sink,
+                                &mut current,
+                                total,
+                                emit,
+                                cancel,
+                            )?;
+                        }
                     }
                 }
             }
@@ -288,6 +332,7 @@ fn merge_appended<S: RowSink>(
 fn consume_append_row<S: RowSink>(
     table: &SourceTable,
     values: Vec<CellValue>,
+    row_mapping: &RowMapping,
     options: &MergeOptions,
     plan: &OutputPlan,
     key_indices: &[usize],
@@ -301,7 +346,7 @@ fn consume_append_row<S: RowSink>(
     if cancel.load(Ordering::Relaxed) {
         return Err(MergeCancelled.into());
     }
-    let output_row = mapped_row(table, values, options, plan);
+    let output_row = mapped_row(values, row_mapping, plan);
     if !passes_filter(&output_row, plan, options) {
         return Ok(());
     }
@@ -319,6 +364,7 @@ fn consume_append_row<S: RowSink>(
 
 fn merge_consolidated<S: RowSink>(
     tables: &[&SourceTable],
+    row_mappings: &[RowMapping],
     options: &MergeOptions,
     plan: &OutputPlan,
     sink: &mut S,
@@ -333,12 +379,12 @@ fn merge_consolidated<S: RowSink>(
     let mut groups = HashMap::<String, Vec<CellValue>>::new();
     let total = tables.iter().map(|table| table.estimated_rows).sum();
     let mut current = 0;
-    for table in tables {
+    for (table_index, table) in tables.iter().enumerate() {
         for_each_table_row(table, |values| {
             if cancel.load(Ordering::Relaxed) {
                 return Err(MergeCancelled.into());
             }
-            let row = mapped_row(table, values, options, plan);
+            let row = mapped_row(values, &row_mappings[table_index], plan);
             if passes_filter(&row, plan, options) {
                 let key = row_key(&row, &keys);
                 groups
@@ -366,6 +412,7 @@ fn merge_consolidated<S: RowSink>(
 
 fn merge_joined<S: RowSink>(
     tables: &[&SourceTable],
+    row_mappings: &[RowMapping],
     options: &MergeOptions,
     plan: &OutputPlan,
     sink: &mut S,
@@ -385,7 +432,7 @@ fn merge_joined<S: RowSink>(
             if cancel.load(Ordering::Relaxed) {
                 return Err(MergeCancelled.into());
             }
-            let row = mapped_row(table, values, options, plan);
+            let row = mapped_row(values, &row_mappings[table_index], plan);
             incoming
                 .entry(row_key(&row, &keys))
                 .and_modify(|existing| fill_empty(existing, &row))
@@ -443,48 +490,102 @@ where
             |row| callback(row.into_iter().map(CellValue::Text).collect()),
         ),
         SourceKind::Workbook => {
-            let mut workbook = open_workbook_auto(&table.path)?;
-            let range = workbook.worksheet_range(&table.sheet_name)?;
-            for row in range.rows().skip(table.header_row + table.header_rows - 1) {
-                callback(row.iter().map(CellValue::from_calamine).collect())?;
+            if is_xlsx_path(&table.path) {
+                let mut workbook: Xlsx<BufReader<File>> = open_workbook(&table.path)?;
+                for_each_xlsx_row(
+                    &mut workbook,
+                    &table.sheet_name,
+                    table.header_row + table.header_rows - 1,
+                    None,
+                    |row| callback(row.iter().map(CellValue::from_calamine).collect()),
+                )?;
+                Ok(())
+            } else {
+                let mut workbook = open_workbook_auto(&table.path)?;
+                let range = workbook.worksheet_range(&table.sheet_name)?;
+                for row in range.rows().skip(table.header_row + table.header_rows - 1) {
+                    callback(row.iter().map(CellValue::from_calamine).collect())?;
+                }
+                Ok(())
             }
-            Ok(())
         }
     }
 }
 
+struct RowMapping {
+    /// (源列、输出列、转换操作、是否可以从输入行直接移动值)。
+    columns: Vec<(usize, usize, TransformOp, bool)>,
+    source_file: Option<String>,
+    source_sheet: Option<String>,
+}
+
+fn build_row_mapping(table: &SourceTable, plan: &OutputPlan, mode: MergeMode) -> RowMapping {
+    let columns = source_to_output_map(table, plan, mode);
+    let mut source_use_count = HashMap::<usize, usize>::new();
+    for (source_index, _) in &columns {
+        *source_use_count.entry(*source_index).or_default() += 1;
+    }
+
+    // 与 mapped_row 之前的 find 语义保持一致：重复 source_index 时取第一条规则。
+    let mut transforms = vec![None; table.headers.len()];
+    for mapping in &table.mappings {
+        if let Some(transform) = transforms.get_mut(mapping.source_index) {
+            if transform.is_none() {
+                *transform = Some(mapping.transform);
+            }
+        }
+    }
+
+    let columns = columns
+        .into_iter()
+        .map(|(source_index, output_index)| {
+            let transform = transforms
+                .get(source_index)
+                .and_then(|value| *value)
+                .unwrap_or(TransformOp::None);
+            let can_move = transform == TransformOp::None
+                && source_use_count.get(&source_index).copied() == Some(1);
+            (source_index, output_index, transform, can_move)
+        })
+        .collect();
+
+    RowMapping {
+        columns,
+        source_file: plan.source_file_column.map(|_| {
+            table
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        }),
+        source_sheet: plan.source_sheet_column.map(|_| table.sheet_name.clone()),
+    }
+}
+
 fn mapped_row(
-    table: &SourceTable,
     values: Vec<CellValue>,
-    options: &MergeOptions,
+    row_mapping: &RowMapping,
     plan: &OutputPlan,
 ) -> Vec<CellValue> {
+    let mut values = values;
     let mut output = vec![CellValue::Empty; plan.headers.len()];
-    for (source_index, output_index) in source_to_output_map(table, plan, options.mode) {
-        if let Some(value) = values.get(source_index) {
-            let transform = table
-                .mappings
-                .iter()
-                .find(|mapping| mapping.source_index == source_index)
-                .map(|mapping| mapping.transform)
-                .unwrap_or(TransformOp::None);
-            let value = value.transformed(transform);
+    for &(source_index, output_index, transform, can_move) in &row_mapping.columns {
+        if source_index < values.len() {
+            let value = if can_move {
+                std::mem::replace(&mut values[source_index], CellValue::Empty)
+            } else {
+                values[source_index].transformed(transform)
+            };
             if output[output_index].is_empty() && !value.is_empty() {
                 output[output_index] = value;
             }
         }
     }
     if let Some(index) = plan.source_file_column {
-        output[index] = CellValue::Text(
-            table
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        );
+        output[index] = CellValue::Text(row_mapping.source_file.clone().unwrap_or_default());
     }
     if let Some(index) = plan.source_sheet_column {
-        output[index] = CellValue::Text(table.sheet_name.clone());
+        output[index] = CellValue::Text(row_mapping.source_sheet.clone().unwrap_or_default());
     }
     output
 }
@@ -949,6 +1050,42 @@ mod tests {
                 .transformed(TransformOp::Lowercase)
                 .as_text(),
             "ab"
+        );
+    }
+    #[test]
+    fn manual_mapping_can_reuse_a_source_value() {
+        let headers = vec!["原始值".to_owned()];
+        let mut mappings = crate::model::make_default_mappings(&headers);
+        mappings.push(crate::model::ColumnMapping {
+            source_index: 0,
+            source_name: "原始值".to_owned(),
+            target_name: "复制值".to_owned(),
+            enabled: true,
+            transform: TransformOp::None,
+            aggregate: AggregateOp::First,
+        });
+        let table = SourceTable {
+            path: PathBuf::from("customers.csv"),
+            sheet_name: "CSV".to_owned(),
+            kind: SourceKind::Csv { delimiter: b',' },
+            header_row: 1,
+            header_rows: 1,
+            suggested_header_row: 1,
+            headers,
+            estimated_rows: 1,
+            enabled: true,
+            mappings,
+        };
+        let options = MergeOptions {
+            mode: MergeMode::Manual,
+            ..MergeOptions::default()
+        };
+        let plan = build_output_plan(std::slice::from_ref(&table), &options);
+        let mapping = build_row_mapping(&table, &plan, options.mode);
+        let row = mapped_row(vec![CellValue::Text("001".to_owned())], &mapping, &plan);
+        assert_eq!(
+            row.iter().map(CellValue::as_text).collect::<Vec<_>>(),
+            ["001", "001"]
         );
     }
     #[test]

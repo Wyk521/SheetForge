@@ -90,6 +90,18 @@ impl CopyFormat {
     }
 }
 
+struct CopyBatch {
+    payload: Bytes,
+    /// 发送该批次后累计编码的行数。
+    rows: u64,
+}
+
+struct CopyProducerResult {
+    merged_rows: Option<u64>,
+    bytes: u64,
+    batches: u64,
+}
+
 fn parse_if_exists(value: &str) -> Result<IfExists> {
     match value.trim().to_ascii_lowercase().as_str() {
         "abort" => Ok(IfExists::Abort),
@@ -308,53 +320,87 @@ async fn import_database(
         copy_format.sql_name()
     );
     let mut sink = Box::pin(transaction.copy_in(&sql).await?);
-    let mut buffer = Vec::with_capacity(COPY_BATCH_BYTES + 64 * 1024);
-    if copy_format == CopyFormat::Binary {
-        encode_binary_header(&mut buffer);
-    }
-    let mut bytes = buffer.len() as u64;
-    let mut rows = 0_u64;
-    let mut batches = 0_u64;
     let estimated_rows = tables
         .iter()
         .filter(|table| table.enabled)
         .map(|table| table.estimated_rows)
         .sum::<u64>();
 
-    let (row_sender, mut row_receiver) = tokio::sync::mpsc::channel(256);
+    // 按批次而不是按行跨线程传递。之前每一行都要经过一次 channel，导致
+    // 6 百万行数据产生数百万次同步和 Vec 所有权转移；现在生产线程直接
+    // 编码成 8 MiB COPY 批次，数据库线程只负责发送网络数据。
+    let (batch_sender, mut batch_receiver) = tokio::sync::mpsc::channel(4);
     let producer_cancel = cancel.clone();
-    let producer = tauri::async_runtime::spawn_blocking(move || {
-        stream_merged_rows(
+    let producer = tauri::async_runtime::spawn_blocking(move || -> Result<CopyProducerResult> {
+        let mut buffer = Vec::with_capacity(COPY_BATCH_BYTES + 64 * 1024);
+        if copy_format == CopyFormat::Binary {
+            encode_binary_header(&mut buffer);
+        }
+        let mut bytes = buffer.len() as u64;
+        let mut rows = 0_u64;
+        let mut batches = 0_u64;
+        let mut send_batch = |buffer: &mut Vec<u8>, rows: u64| -> Result<()> {
+            if buffer.is_empty() {
+                return Ok(());
+            }
+            let batch = std::mem::replace(buffer, Vec::with_capacity(COPY_BATCH_BYTES + 64 * 1024));
+            batch_sender
+                .blocking_send(CopyBatch {
+                    payload: Bytes::from(batch),
+                    rows,
+                })
+                .map_err(|_| anyhow!("数据库写入端已停止"))?;
+            batches += 1;
+            Ok(())
+        };
+
+        let merged = stream_merged_rows(
             &tables,
             &options,
             request.empty_as_null,
             &|_, _, _| {},
             &producer_cancel,
             |row| {
-                row_sender
-                    .blocking_send(row)
-                    .map_err(|_| anyhow!("数据库写入端已停止"))
+                let before = buffer.len();
+                match copy_format {
+                    CopyFormat::Binary => encode_binary_row(&row, &mut buffer)
+                        .map_err(|error| anyhow!(error.to_string()))?,
+                    CopyFormat::Text => encode_copy_row_into(&row, &mut buffer),
+                }
+                bytes += (buffer.len() - before) as u64;
+                rows += 1;
+                if buffer.len() >= COPY_BATCH_BYTES {
+                    send_batch(&mut buffer, rows)?;
+                }
+                Ok(())
             },
-        )
+        )?;
+
+        let merged_rows = merged.map(|(_, rows)| rows);
+        if merged_rows.is_some() {
+            if copy_format == CopyFormat::Binary {
+                encode_binary_trailer(&mut buffer);
+            }
+            send_batch(&mut buffer, rows)?;
+        }
+        Ok(CopyProducerResult {
+            merged_rows,
+            bytes,
+            batches,
+        })
     });
 
-    while let Some(row) = row_receiver.recv().await {
+    let mut rows = 0_u64;
+    while let Some(batch) = batch_receiver.recv().await {
         if cancel.load(Ordering::Relaxed) {
-            drop(row_receiver);
+            drop(batch_receiver);
             let _ = producer.await;
             return Ok(None);
         }
-        let before = buffer.len();
-        match copy_format {
-            CopyFormat::Binary => {
-                encode_binary_row(&row, &mut buffer).map_err(|error| anyhow!(error.to_string()))?
-            }
-            CopyFormat::Text => encode_copy_row_into(&row, &mut buffer),
-        }
-        bytes += (buffer.len() - before) as u64;
-        rows += 1;
+        rows = batch.rows;
+        sink.as_mut().send(batch.payload).await?;
 
-        if rows.is_multiple_of(1_000) || rows == estimated_rows {
+        if rows > 0 {
             let _ = app.emit(
                 "merge-progress",
                 MergeProgressDto {
@@ -364,36 +410,18 @@ async fn import_database(
                 },
             );
         }
-        if buffer.len() >= COPY_BATCH_BYTES {
-            let batch = std::mem::replace(
-                &mut buffer,
-                Vec::with_capacity(COPY_BATCH_BYTES + 64 * 1024),
-            );
-            sink.as_mut().send(Bytes::from(batch)).await?;
-            batches += 1;
-        }
     }
 
     let produced = producer
         .await
         .map_err(|error| anyhow!("表格处理线程异常：{error}"))??;
-    let Some((_produced_plan, produced_rows)) = produced else {
+    let Some(produced_rows) = produced.merged_rows else {
         return Ok(None);
     };
     if produced_rows != rows {
         return Err(anyhow!(
             "行流计数不一致：处理端 {produced_rows} 行，数据库端 {rows} 行"
         ));
-    }
-
-    if copy_format == CopyFormat::Binary {
-        let before = buffer.len();
-        encode_binary_trailer(&mut buffer);
-        bytes += (buffer.len() - before) as u64;
-    }
-    if !buffer.is_empty() {
-        sink.as_mut().send(Bytes::from(buffer)).await?;
-        batches += 1;
     }
     let server_rows = sink.as_mut().finish().await?;
     if server_rows != rows {
@@ -413,8 +441,8 @@ async fn import_database(
     );
     Ok(Some(DatabaseImportFinishedDto {
         rows,
-        bytes,
-        batches,
+        bytes: produced.bytes,
+        batches: produced.batches,
         server: profile.host,
         database: connection_info.database,
         target: format!("{}.{}", target.schema, target.table),

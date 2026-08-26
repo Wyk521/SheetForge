@@ -482,6 +482,18 @@ fn preflight_catches_missing_filter_column() {
 }
 
 #[test]
+fn xlsx_preflight_samples_only_data_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_workbook(&dir, "large-shape.xlsx", &[&["姓名"], &["张三"]]);
+    let table = scan_workbook_sheet(&path, "Sheet1");
+    let issues = preflight_for_destination(&[table], &MergeOptions::default(), false);
+    assert!(
+        issues.iter().any(|issue| issue.title == "输出规模"),
+        "XLSX 预检查应正常完成: {issues:?}"
+    );
+}
+
+#[test]
 fn union_merges_intersection_and_manual() {
     let dir = tempfile::tempdir().unwrap();
     let a = scan_csv(&dir, "a.csv", "姓名,年龄\n张三,30\n");

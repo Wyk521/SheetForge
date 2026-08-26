@@ -1,12 +1,14 @@
 use crate::model::{
     build_output_plan, header_key, source_to_output_map, MergeOptions, SourceKind, SourceTable,
 };
-use crate::scan::decode_csv_field;
+use crate::scan::{decode_csv_field, for_each_xlsx_row, is_xlsx_path};
 use anyhow::{Context, Result};
-use calamine::{open_workbook_auto, Data, Reader};
+use calamine::{open_workbook, open_workbook_auto, Data, Reader, Xlsx};
 use csv::{ByteRecord, ReaderBuilder};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::BufReader;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PreviewTable {
@@ -43,15 +45,33 @@ pub fn preview_source(table: &SourceTable, limit: usize) -> Result<PreviewTable>
             }
         }
         SourceKind::Workbook => {
-            let mut workbook = open_workbook_auto(&table.path)?;
-            let range = workbook.worksheet_range(&table.sheet_name)?;
-            rows.extend(
-                range
-                    .rows()
-                    .skip(table.header_row + table.header_rows - 1)
-                    .take(limit)
-                    .map(|row| row.iter().map(Data::to_string).collect()),
-            );
+            if is_xlsx_path(&table.path) {
+                let mut workbook: Xlsx<BufReader<File>> = open_workbook(&table.path)?;
+                for_each_xlsx_row(
+                    &mut workbook,
+                    &table.sheet_name,
+                    table.header_row + table.header_rows - 1,
+                    Some(limit),
+                    |row| {
+                        let mut values = vec![String::new(); table.headers.len()];
+                        for (index, value) in row.iter().enumerate().take(values.len()) {
+                            values[index] = value.to_string();
+                        }
+                        rows.push(values);
+                        Ok(())
+                    },
+                )?;
+            } else {
+                let mut workbook = open_workbook_auto(&table.path)?;
+                let range = workbook.worksheet_range(&table.sheet_name)?;
+                rows.extend(
+                    range
+                        .rows()
+                        .skip(table.header_row + table.header_rows - 1)
+                        .take(limit)
+                        .map(|row| row.iter().map(Data::to_string).collect()),
+                );
+            }
         }
     }
     Ok(PreviewTable {
