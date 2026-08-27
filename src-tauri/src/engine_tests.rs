@@ -603,3 +603,23 @@ fn batch_rename_same_field_across_tables() {
     let zhao = data.iter().find(|row| row[0] == "赵六").unwrap();
     assert_eq!(zhao.get(amount_col).map(String::as_str).unwrap_or(""), "");
 }
+
+#[test]
+fn multiline_header_renamed_to_plain_header_merges_into_one_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let wrapped = scan_csv(&dir, "wrapped.csv", "\"客户\n姓名\",金额\n张三,100\n");
+    let plain = scan_csv(&dir, "plain.csv", "客户姓名,金额\n李四,200\n");
+    let mut wrapped = wrapped;
+    wrapped.mappings[0].target_name = "客户姓名".to_owned();
+
+    let rows = merge_and_read(
+        vec![wrapped, plain],
+        MergeOptions {
+            mode: MergeMode::Manual,
+            ..Default::default()
+        },
+    );
+    assert_eq!(rows[0], vec!["客户姓名", "金额"]);
+    assert_eq!(rows[1], vec!["张三", "100"]);
+    assert_eq!(rows[2], vec!["李四", "200"]);
+}

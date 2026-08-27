@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useMergeStore } from "../stores/merge";
+import { headerKey, useMergeStore } from "../stores/merge";
 import FieldBatchView from "../components/FieldBatchView.vue";
 import type { MergeMode } from "../types";
 
@@ -61,12 +61,19 @@ const mappingRows = computed(() => {
   const t = table.value;
   if (!t) return [];
   const search = store.mappingSearch.toLowerCase();
+  const outputPositions = new Map(
+    store.planHeaders.map((header, index) => [headerKey(header), index])
+  );
+  const outputPosition = (source: string, target: string) =>
+    outputPositions.get(headerKey(target)) ??
+    outputPositions.get(headerKey(source)) ??
+    Number.MAX_SAFE_INTEGER;
   return t.mappings
     .map((m, index) => ({ m, index, suggestion: suggestions.value[m.source_name] ?? "" }))
     .filter((row) => {
-      const commonField = commonKeys.value.has(row.m.source_name.trim().toLowerCase());
+      const commonField = commonKeys.value.has(headerKey(row.m.source_name));
       const differs =
-        row.m.source_name.trim().toLowerCase() !== row.m.target_name.trim().toLowerCase() ||
+        headerKey(row.m.source_name) !== headerKey(row.m.target_name) ||
         !!row.suggestion;
       if (store.hideCommonMappings && commonField) return false;
       if (store.mismatchOnly && !differs) return false;
@@ -78,7 +85,13 @@ const mappingRows = computed(() => {
         return false;
       }
       return true;
-    });
+    })
+    .sort(
+      (left, right) =>
+        outputPosition(left.m.source_name, left.m.target_name) -
+          outputPosition(right.m.source_name, right.m.target_name) ||
+        left.index - right.index
+    );
 });
 
 function onModeChange(mode: MergeMode) {
@@ -88,6 +101,10 @@ function onModeChange(mode: MergeMode) {
 
 function updateTableSelection(index: number) {
   store.selectedMappingTable = index;
+}
+
+function outputIndex(name: string): number {
+  return store.planHeaders.findIndex((header) => headerKey(header) === headerKey(name));
 }
 </script>
 
@@ -178,44 +195,46 @@ function updateTableSelection(index: number) {
           </el-checkbox>
         </el-card>
 
-        <el-card shadow="never" style="flex: 1">
-          <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px">输出字段顺序</div>
-          <div v-if="store.planHeaders.length === 0" style="color: var(--sf-text-muted); font-size: 11px">
-            暂无输出字段
-          </div>
-          <div v-else style="display: flex; flex-direction: column; gap: 6px">
-            <div
-              v-for="(header, index) in store.planHeaders"
-              :key="header"
-              style="display: flex; align-items: center; gap: 8px; background: #f5f7fa; border-radius: 4px; padding: 6px 10px"
-            >
-              <span style="flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-                {{ header }}
-              </span>
-              <el-button size="small" :disabled="index === 0" @click="store.moveOutputColumn(index, -1)">
-                ↑
-              </el-button>
-              <el-button
-                size="small"
-                :disabled="index === store.planHeaders.length - 1"
-                @click="store.moveOutputColumn(index, 1)"
-              >
-                ↓
-              </el-button>
-            </div>
-          </div>
-        </el-card>
       </div>
 
-      <!-- 右侧：字段映射 / 引导 -->
+      <!-- 右侧：字段映射与输出顺序 -->
       <div style="flex: 1; min-width: 0">
-        <el-card v-if="!mappingEnabled" shadow="never" style="text-align: center; padding: 40px 20px">
-          <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px">并集 / 交集模式不修改字段</div>
-          <div style="font-size: 12px; color: var(--sf-text-muted)">
-            输出字段直接取自各表的原始表头。需要改名、纠错或清洗字段时，请切换到「修正表头」模式。
-          </div>
-        </el-card>
-        <el-card v-else shadow="never">
+        <el-card shadow="never">
+          <template v-if="!mappingEnabled">
+            <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px">输出字段顺序</div>
+            <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 10px">
+              用上下按钮调整最终输出列顺序。
+            </div>
+            <div v-if="store.planHeaders.length === 0" style="color: var(--sf-text-muted); font-size: 11px">
+              暂无输出字段
+            </div>
+            <div v-else style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px">
+              <div
+                v-for="(header, index) in store.planHeaders"
+                :key="header"
+                style="display: flex; align-items: center; gap: 8px; background: #f5f7fa; border-radius: 4px; padding: 6px 10px"
+              >
+                <span style="flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                  {{ header }}
+                </span>
+                <el-button size="small" :disabled="index === 0" @click="store.moveOutputColumn(index, -1)">
+                  ↑
+                </el-button>
+                <el-button
+                  size="small"
+                  :disabled="index === store.planHeaders.length - 1"
+                  @click="store.moveOutputColumn(index, 1)"
+                >
+                  ↓
+                </el-button>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px">字段映射与输出顺序</div>
+            <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 10px">
+              映射表按最终输出顺序排列；直接在字段行中用 ↑↓ 调整该列位置。
+            </div>
           <el-radio-group v-model="store.mappingScope" size="small" style="margin-bottom: 10px">
             <el-radio-button value="table">按表改字段</el-radio-button>
             <el-radio-button value="field">按字段改表</el-radio-button>
@@ -252,7 +271,7 @@ function updateTableSelection(index: number) {
               {{ store.hideCommonMappings ? "显示共有字段" : "隐藏共有字段" }}
             </el-button>
           </div>
-          <el-table :data="mappingRows" size="small" :max-height="440" border>
+          <el-table :data="mappingRows" size="small" border>
             <el-table-column label="启用" width="64">
               <template #default="{ row }">
                 <el-switch
@@ -268,6 +287,28 @@ function updateTableSelection(index: number) {
                 <div v-if="row.suggestion" style="color: var(--sf-primary); font-size: 10.5px">
                   建议 → {{ row.suggestion }}
                 </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="顺序" width="82" align="center">
+              <template #default="{ row }">
+                <el-button-group>
+                  <el-button
+                    size="small"
+                    text
+                    :disabled="outputIndex(row.m.target_name) <= 0"
+                    @click="store.moveOutputColumnByName(row.m.target_name, -1)"
+                  >
+                    ↑
+                  </el-button>
+                  <el-button
+                    size="small"
+                    text
+                    :disabled="outputIndex(row.m.target_name) < 0 || outputIndex(row.m.target_name) >= store.planHeaders.length - 1"
+                    @click="store.moveOutputColumnByName(row.m.target_name, 1)"
+                  >
+                    ↓
+                  </el-button>
+                </el-button-group>
               </template>
             </el-table-column>
             <el-table-column label="目标字段" min-width="160">
@@ -311,6 +352,13 @@ function updateTableSelection(index: number) {
           </el-table>
           </template>
           <FieldBatchView v-else />
+          </template>
+          <div v-if="!mappingEnabled" style="text-align: center; padding: 24px 20px 10px">
+            <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px">并集 / 交集模式不修改字段</div>
+            <div style="font-size: 12px; color: var(--sf-text-muted)">
+              输出字段直接取自各表的原始表头。需要改名、纠错或清洗字段时，请切换到「修正表头」模式。
+            </div>
+          </div>
         </el-card>
       </div>
     </div>

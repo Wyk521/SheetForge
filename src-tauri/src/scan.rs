@@ -1,4 +1,4 @@
-use crate::model::{make_default_mappings, normalize_headers, SourceKind, SourceTable};
+use crate::model::{header_key, make_default_mappings, normalize_headers, SourceKind, SourceTable};
 use anyhow::{Context, Result};
 use calamine::{open_workbook, open_workbook_auto, Data, Dimensions, Reader, Xlsx};
 use csv::{ByteRecord, ReaderBuilder};
@@ -669,7 +669,11 @@ fn combine_header_rows(rows: &[Vec<String>]) -> Vec<String> {
                 .get(column)
                 .map(|value| value.trim())
                 .unwrap_or_default();
-            if !value.is_empty() && !seen.iter().any(|existing: &String| existing == value) {
+            if !value.is_empty()
+                && !seen
+                    .iter()
+                    .any(|existing: &String| header_key(existing) == header_key(value))
+            {
                 seen.push(value.to_owned());
             }
         }

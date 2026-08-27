@@ -151,7 +151,11 @@ pub struct OutputPlan {
 }
 
 pub fn header_key(value: &str) -> String {
-    value.trim().to_lowercase()
+    value
+        .split(['\r', '\n', '\u{2028}', '\u{2029}'])
+        .map(str::trim)
+        .collect::<String>()
+        .to_lowercase()
 }
 
 pub fn normalize_headers<I, S>(values: I) -> Vec<String>
@@ -388,6 +392,28 @@ mod tests {
             normalize_headers(["姓名", "", "姓名"]),
             vec!["姓名", "未命名列2", "姓名_2"]
         );
+    }
+
+    #[test]
+    fn line_breaks_in_headers_are_ignored_for_matching() {
+        assert_eq!(header_key("客户\n姓名"), "客户姓名");
+        assert_eq!(header_key("客户\r\n姓名"), "客户姓名");
+        assert_eq!(header_key("客户 \n 姓名"), "客户姓名");
+    }
+
+    #[test]
+    fn manual_mapping_with_line_breaks_does_not_create_duplicate_output_column() {
+        let mut wrapped = table(&["客户\n姓名"]);
+        let plain = table(&["客户姓名"]);
+        wrapped.mappings[0].target_name = "客户姓名".to_owned();
+        let plan = build_output_plan(
+            &[wrapped, plain],
+            &MergeOptions {
+                mode: MergeMode::Manual,
+                ..Default::default()
+            },
+        );
+        assert_eq!(plan.headers, vec!["客户姓名"]);
     }
 
     #[test]

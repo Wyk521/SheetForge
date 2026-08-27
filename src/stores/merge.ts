@@ -52,6 +52,16 @@ export interface FieldGroup {
   uniformTransform: string | null;
 }
 
+// 与 Rust 端 header_key 保持一致：换行只是 Excel 单元格的显示换行，
+// 不应把同一字段拆成两个字段；普通空格仍保留其字段语义。
+export function headerKey(value: string): string {
+  return value
+    .split(/\r\n?|\n|\u2028|\u2029/)
+    .map((part) => part.trim())
+    .join("")
+    .toLowerCase();
+}
+
 export const useMergeStore = defineStore("merge", () => {
   // ---- 状态（原 MergeApp 的状态集） ----
   const sources = ref<SourceTable[]>([]);
@@ -121,33 +131,60 @@ export const useMergeStore = defineStore("merge", () => {
   const fieldGroups = computed<FieldGroup[]>(() => {
     const byKey = new Map<
       string,
-      { key: string; tables: string[]; targets: Set<string>; enables: Set<boolean>; transforms: Set<string> }
+      {
+        key: string;
+        tables: string[];
+        targets: Map<string, string>;
+        enables: Set<boolean>;
+        transforms: Set<string>;
+      }
     >();
     for (const table of sources.value) {
       if (!table.enabled) continue;
       for (const mapping of table.mappings) {
-        const key = mapping.source_name.trim();
+        const key = headerKey(mapping.source_name);
         let group = byKey.get(key);
         if (!group) {
-          group = { key, tables: [], targets: new Set(), enables: new Set(), transforms: new Set() };
+          group = {
+            key: mapping.source_name.trim(),
+            tables: [],
+            targets: new Map(),
+            enables: new Set(),
+            transforms: new Set(),
+          };
           byKey.set(key, group);
         }
         group.tables.push(displayName(table));
-        group.targets.add(mapping.target_name.trim());
+        const target = mapping.target_name.trim();
+        group.targets.set(headerKey(target), target);
         group.enables.add(mapping.enabled);
         group.transforms.add(mapping.transform);
       }
     }
+    const outputPositions = new Map(
+      planHeaders.value.map((header, index) => [headerKey(header), index])
+    );
+    const outputPosition = (value: string) =>
+      outputPositions.get(headerKey(value)) ?? Number.MAX_SAFE_INTEGER;
+    const groupPosition = (group: { key: string; targets: Map<string, string> }) =>
+      Math.min(
+        outputPosition(group.key),
+        ...[...group.targets.values()].map((target) => outputPosition(target))
+      );
+
     return [...byKey.values()]
+      .sort((a, b) => {
+        const position = groupPosition(a) - groupPosition(b);
+        return position || b.tables.length - a.tables.length || a.key.localeCompare(b.key, "zh");
+      })
       .map((g) => ({
         key: g.key,
         count: g.tables.length,
         tables: g.tables,
-        uniformTarget: g.targets.size === 1 ? [...g.targets][0] : null,
+        uniformTarget: g.targets.size === 1 ? [...g.targets.values()][0] : null,
         uniformEnabled: g.enables.size === 1 ? [...g.enables][0] : null,
         uniformTransform: g.transforms.size === 1 ? [...g.transforms][0] : null,
-      }))
-      .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key, "zh"));
+      }));
   });
 
   // ---- 工具 ----
@@ -430,6 +467,35 @@ export const useMergeStore = defineStore("merge", () => {
     void refreshPlan();
   }
 
+  function replaceOutputOrderName(previous: string, next: string) {
+    const previousKey = headerKey(previous);
+    if (!previousKey || options.value.output_order.length === 0) return;
+
+    const nextValue = next.trim();
+    const seen = new Set<string>();
+    let changed = false;
+    const updated: string[] = [];
+    for (const name of options.value.output_order) {
+      let value = name;
+      if (headerKey(name) === previousKey) {
+        value = nextValue;
+        changed = true;
+      }
+      const key = headerKey(value);
+      if (!key) {
+        changed = true;
+        continue;
+      }
+      if (seen.has(key)) {
+        changed = true;
+        continue;
+      }
+      seen.add(key);
+      updated.push(value);
+    }
+    if (changed) options.value.output_order = updated;
+  }
+
   function moveOutputColumn(index: number, direction: number) {
     const headers = [...planHeaders.value];
     if (index < 0 || index >= headers.length) return;
@@ -437,6 +503,11 @@ export const useMergeStore = defineStore("merge", () => {
     [headers[index], headers[target]] = [headers[target], headers[index]];
     options.value.output_order = headers;
     void refreshPlan();
+  }
+
+  function moveOutputColumnByName(name: string, direction: number) {
+    const index = planHeaders.value.findIndex((header) => headerKey(header) === headerKey(name));
+    if (index >= 0) moveOutputColumn(index, direction);
   }
 
   function selectedTable(): SourceTable | undefined {
@@ -447,6 +518,7 @@ export const useMergeStore = defineStore("merge", () => {
     const table = selectedTable();
     const mapping = table?.mappings[index];
     if (mapping) {
+      replaceOutputOrderName(mapping.target_name, target);
       mapping.enabled = enabled;
       mapping.target_name = target;
     }
@@ -473,6 +545,7 @@ export const useMergeStore = defineStore("merge", () => {
       return;
     }
     for (const mapping of table.mappings) {
+      replaceOutputOrderName(mapping.target_name, mapping.source_name);
       mapping.target_name = mapping.source_name;
       mapping.enabled = true;
       mapping.transform = "None";
@@ -488,7 +561,10 @@ export const useMergeStore = defineStore("merge", () => {
     for (const table of sources.value) {
       for (const mapping of table.mappings) {
         const target = suggestions[mapping.source_name];
-        if (target) mapping.target_name = target;
+        if (target) {
+          replaceOutputOrderName(mapping.target_name, target);
+          mapping.target_name = target;
+        }
       }
     }
     void refreshPlan();
@@ -496,15 +572,19 @@ export const useMergeStore = defineStore("merge", () => {
 
   // ---- 按字段批量操作（作用于所有启用表中同名来源字段的映射） ----
   function forEachFieldMapping(key: string, fn: (mapping: ColumnMapping) => void) {
+    const wantedKey = headerKey(key);
     for (const table of sources.value) {
       if (!table.enabled) continue;
       for (const mapping of table.mappings) {
-        if (mapping.source_name.trim() === key) fn(mapping);
+        if (headerKey(mapping.source_name) === wantedKey) fn(mapping);
       }
     }
   }
 
   function setFieldTarget(key: string, target: string) {
+    const previousTargets = new Set<string>();
+    forEachFieldMapping(key, (mapping) => previousTargets.add(mapping.target_name));
+    for (const previous of previousTargets) replaceOutputOrderName(previous, target);
     forEachFieldMapping(key, (mapping) => {
       mapping.target_name = target.trim();
     });
@@ -526,6 +606,7 @@ export const useMergeStore = defineStore("merge", () => {
   }
 
   function resetField(key: string) {
+    forEachFieldMapping(key, (mapping) => replaceOutputOrderName(mapping.target_name, mapping.source_name));
     forEachFieldMapping(key, (mapping) => {
       mapping.target_name = mapping.source_name;
       mapping.enabled = true;
@@ -863,7 +944,7 @@ export const useMergeStore = defineStore("merge", () => {
     chooseFolder, chooseFiles, scanFolder, scanFiles, clearSources,
     toggleSourceEnabled, selectAll, toggleGroup, setGroupEnabled, removeGroup, removeSource,
     applyGroupHeader, reloadTable,
-    setMode, setAdvanced, moveOutputColumn, selectedTable, setMapping, setMappingOperation,
+    setMode, setAdvanced, moveOutputColumn, moveOutputColumnByName, selectedTable, setMapping, setMappingOperation,
     resetMapping, applySuggestions,
     setFieldTarget, setFieldEnabled, setFieldTransform, resetField, toggleCommonFields: () => (hideCommonMappings.value = !hideCommonMappings.value),
     setMismatchOnly: (v: boolean) => (mismatchOnly.value = v),

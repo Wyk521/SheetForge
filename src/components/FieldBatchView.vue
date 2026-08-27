@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { useMergeStore } from "../stores/merge";
+import { headerKey, useMergeStore } from "../stores/merge";
 import type { TransformOp } from "../types";
 
 const store = useMergeStore();
+
+function outputIndex(name: string): number {
+  return store.planHeaders.findIndex((header) => headerKey(header) === headerKey(name));
+}
 
 const TRANSFORMS: { value: TransformOp; label: string }[] = [
   { value: "None", label: "不处理" },
@@ -37,10 +41,10 @@ const filteredGroups = computed(() => {
         按来源表头分组，改动会同步到所有启用表中的同名字段
       </span>
     </div>
-    <el-table v-if="filteredGroups.length > 0" :data="filteredGroups" size="small" :max-height="440" border>
+    <el-table v-if="filteredGroups.length > 0" :data="filteredGroups" size="small" border>
       <el-table-column type="expand">
         <template #default="{ row }">
-          <div style="padding: 6px 24px; max-height: 220px; overflow-y: auto">
+          <div style="padding: 6px 24px">
             <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 4px">
               涉及 {{ row.count }} 张启用表：
             </div>
@@ -58,6 +62,28 @@ const filteredGroups = computed(() => {
       <el-table-column label="涉及表数" width="100">
         <template #default="{ row }">
           <el-tag size="small" type="info">{{ row.count }} 张</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="顺序" width="82" align="center">
+        <template #default="{ row }">
+          <el-button-group>
+            <el-button
+              size="small"
+              text
+              :disabled="!row.uniformTarget || outputIndex(row.uniformTarget) <= 0"
+              @click="store.moveOutputColumnByName(row.uniformTarget ?? '', -1)"
+            >
+              ↑
+            </el-button>
+            <el-button
+              size="small"
+              text
+              :disabled="!row.uniformTarget || outputIndex(row.uniformTarget) < 0 || outputIndex(row.uniformTarget) >= store.planHeaders.length - 1"
+              @click="store.moveOutputColumnByName(row.uniformTarget ?? '', 1)"
+            >
+              ↓
+            </el-button>
+          </el-button-group>
         </template>
       </el-table-column>
       <el-table-column label="目标字段" min-width="160">
