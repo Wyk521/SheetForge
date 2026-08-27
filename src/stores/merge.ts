@@ -362,7 +362,7 @@ export const useMergeStore = defineStore("merge", () => {
   async function clearSources() {
     if (!hasSources.value) return;
     try {
-      await ElMessageBox.confirm("确定清空所有数据源？", "确认操作", { type: "warning" });
+      await ElMessageBox.confirm("确定清空所有数据源和输出位置？", "确认操作", { type: "warning" });
     } catch {
       return;
     }
@@ -374,6 +374,12 @@ export const useMergeStore = defineStore("merge", () => {
     collapsedGroups.value = new Set();
     inputLabel.value = "尚未选择文件或文件夹，可直接拖放";
     planHeaders.value = [];
+    outputPath.value = "";
+    outputDestination.value = "xlsx";
+    databaseImport.value = defaultDatabaseImportOptions();
+    databaseLastResult.value = null;
+    progress.value = 0;
+    progressLabel.value = "";
     await refreshPlan();
   }
 
