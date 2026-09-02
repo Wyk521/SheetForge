@@ -409,9 +409,10 @@ export const useMergeStore = defineStore("merge", () => {
     const visible = filtered ? new Set(visibleSourceIndices.value) : null;
     let changed = false;
     for (const [index, table] of sources.value.entries()) {
-      if (visible && !visible.has(index)) continue;
-      if (table.enabled !== enabled) {
-        table.enabled = enabled;
+      // 筛选状态下按当前结果重建选择集合，未命中的表不能继续参与合并。
+      const nextEnabled = visible ? enabled && visible.has(index) : enabled;
+      if (table.enabled !== nextEnabled) {
+        table.enabled = nextEnabled;
         changed = true;
       }
     }

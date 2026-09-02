@@ -107,13 +107,13 @@ async function previewSource(index: number) {
         :disabled="!store.hasSources || store.busy || (store.sourceFilterActive && store.visibleSourceCount === 0)"
         @click="store.selectAll(true, store.sourceFilterActive)"
       >
-        {{ store.sourceFilterActive ? "全选当前结果" : "全选" }}
+        {{ store.sourceFilterActive ? "仅选当前结果" : "全选" }}
       </el-button>
       <el-button
-        :disabled="!store.hasSources || store.busy || (store.sourceFilterActive && store.visibleSourceCount === 0)"
+        :disabled="!store.hasSources || store.busy"
         @click="store.selectAll(false, store.sourceFilterActive)"
       >
-        {{ store.sourceFilterActive ? "全不选当前结果" : "全不选" }}
+        {{ store.sourceFilterActive ? "清空选择" : "全不选" }}
       </el-button>
       <el-button :disabled="!store.hasSources || store.busy" @click="store.clearSources()">
         清空
