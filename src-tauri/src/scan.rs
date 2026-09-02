@@ -1,6 +1,6 @@
 use crate::model::{header_key, make_default_mappings, normalize_headers, SourceKind, SourceTable};
 use anyhow::{Context, Result};
-use calamine::{open_workbook, open_workbook_auto, Data, Dimensions, Reader, Xlsx};
+use calamine::{open_workbook, open_workbook_auto, Data, Reader, Xlsx};
 use csv::{ByteRecord, ReaderBuilder};
 use encoding_rs::GBK;
 use serde::Serialize;
@@ -81,8 +81,9 @@ pub(crate) fn is_xlsx_path(path: &Path) -> bool {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct XlsxStreamBounds {
-    pub(crate) declared: Dimensions,
     pub(crate) actual_start: Option<(u32, u32)>,
+    pub(crate) actual_end: Option<(u32, u32)>,
+    pub(crate) actual_columns: Option<(u32, u32)>,
 }
 
 /// Read an XLSX worksheet one row at a time without materializing the full Range.
@@ -100,30 +101,45 @@ where
     let mut reader = workbook
         .worksheet_cells_reader(sheet_name)
         .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
-    let declared = reader.dimensions();
     let max_rows = max_rows.unwrap_or(usize::MAX);
     if max_rows == 0 {
         return Ok(XlsxStreamBounds {
-            declared,
             actual_start: None,
+            actual_end: None,
+            actual_columns: None,
         });
     }
 
     let mut actual_start = None;
+    let mut actual_end = None;
+    let mut actual_columns: Option<(u32, u32)> = None;
     let mut target_row = None;
     let mut next_row = 0_u32;
     let mut current = Vec::<Data>::new();
     let mut emitted = 0_usize;
+    let mut collecting = true;
 
     while let Some(cell) = reader.next_cell()? {
         let (row, column) = cell.get_position();
+        let value = Data::from(cell.get_value().clone());
+        // Excel 经常会把“设置过格式但没有内容”的单元格写进 XML，
+        // 甚至把它们放到 XFD 或很靠后的行。它们不能参与真实范围、表头
+        // 或数据行的计算，否则会产生上万列和数百万空行。
+        if is_effectively_empty(&value) {
+            continue;
+        }
         if actual_start.is_none() {
             actual_start = Some((row, column));
             target_row = Some(row.saturating_add(row_offset as u32));
             next_row = target_row.unwrap_or(row);
         }
+        actual_end = Some((row, column));
+        actual_columns = Some(match actual_columns {
+            Some((first, last)) => (first.min(column), last.max(column)),
+            None => (column, column),
+        });
         let target_row = target_row.expect("XLSX stream target row must be initialized");
-        if row < target_row {
+        if row < target_row || !collecting {
             continue;
         }
 
@@ -131,12 +147,16 @@ where
             callback(std::mem::take(&mut current))?;
             emitted += 1;
             if emitted >= max_rows {
-                return Ok(XlsxStreamBounds {
-                    declared,
-                    actual_start,
-                });
+                collecting = false;
+                current.clear();
+                // 预览行数达到上限后仍需继续读取 XML，才能识别真实的最后
+                // 一个非空单元格；但后续单元格不再构造 Vec 或调用回调。
+                break;
             }
             next_row = next_row.saturating_add(1);
+        }
+        if !collecting {
+            continue;
         }
 
         let base_column = actual_start.map(|(_, column)| column).unwrap_or(column);
@@ -144,17 +164,28 @@ where
         if current.len() <= relative_column {
             current.resize(relative_column + 1, Data::Empty);
         }
-        current[relative_column] = Data::from(cell.get_value().clone());
+        current[relative_column] = value;
     }
 
-    if actual_start.is_some() && !current.is_empty() {
+    if collecting && actual_start.is_some() && !current.is_empty() {
         callback(current)?;
     }
 
     Ok(XlsxStreamBounds {
-        declared,
         actual_start,
+        actual_end,
+        actual_columns,
     })
+}
+
+fn is_effectively_empty(value: &Data) -> bool {
+    match value {
+        Data::Empty => true,
+        Data::String(text) | Data::DateTimeIso(text) | Data::DurationIso(text) => {
+            text.trim().is_empty()
+        }
+        _ => false,
+    }
 }
 
 pub fn collect_folder(folder: &Path) -> Vec<PathBuf> {
@@ -504,7 +535,7 @@ fn scan_xlsx_auto_headers(path: &Path) -> Result<Vec<SourceTable>> {
             .take(1)
             .cloned()
             .collect::<Vec<_>>();
-        let headers = combine_header_rows(&header_parts);
+        let headers = combine_header_rows_with_width(&header_parts, xlsx_actual_width(&bounds));
         let estimated_rows = xlsx_estimated_rows(&bounds, suggested);
         result.push(source_table_from_headers(
             path,
@@ -583,7 +614,7 @@ fn scan_xlsx_sheet(
             header_row + header_rows - 1
         );
     }
-    let headers = combine_header_rows(&parts);
+    let headers = combine_header_rows_with_width(&parts, xlsx_actual_width(&bounds));
     let estimated_rows = xlsx_estimated_rows(&bounds, header_row + header_rows - 1);
     Ok(source_table_from_headers(
         path,
@@ -606,13 +637,19 @@ fn table_from_range(
 ) -> SourceTable {
     let header_row = header_row.max(1);
     let header_rows = header_rows.clamp(1, 3);
+    let (actual_height, actual_width) = range_content_bounds(range);
     let parts = range
         .rows()
         .skip(header_row - 1)
         .take(header_rows)
-        .map(|row| row.iter().map(Data::to_string).collect::<Vec<_>>())
+        .map(|row| {
+            row.iter()
+                .take(actual_width)
+                .map(Data::to_string)
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
-    let headers = combine_header_rows(&parts);
+    let headers = combine_header_rows_with_width(&parts, actual_width);
     source_table_from_headers(
         path,
         sheet_name,
@@ -620,7 +657,7 @@ fn table_from_range(
         header_rows,
         suggested_header_row,
         headers,
-        range.height().saturating_sub(header_row + header_rows - 1) as u64,
+        actual_height.saturating_sub(header_row + header_rows - 1) as u64,
     )
 }
 
@@ -651,17 +688,43 @@ fn xlsx_estimated_rows(bounds: &XlsxStreamBounds, rows_before_data: usize) -> u6
     let Some((start_row, _)) = bounds.actual_start else {
         return 0;
     };
-    let height = bounds
-        .declared
-        .end
-        .0
-        .saturating_sub(start_row)
-        .saturating_add(1) as usize;
+    let Some((end_row, _)) = bounds.actual_end else {
+        return 0;
+    };
+    let height = end_row.saturating_sub(start_row).saturating_add(1) as usize;
     height.saturating_sub(rows_before_data) as u64
 }
 
+fn xlsx_actual_width(bounds: &XlsxStreamBounds) -> usize {
+    bounds
+        .actual_columns
+        .map(|(first, last)| last.saturating_sub(first).saturating_add(1) as usize)
+        .unwrap_or(0)
+}
+
+fn range_content_bounds(range: &calamine::Range<Data>) -> (usize, usize) {
+    let mut last_row = None;
+    let mut last_column = None;
+    for (row_index, row) in range.rows().enumerate() {
+        for (column_index, value) in row.iter().enumerate() {
+            if !is_effectively_empty(value) {
+                last_row = Some(row_index);
+                last_column =
+                    Some(last_column.map_or(column_index, |last: usize| last.max(column_index)));
+            }
+        }
+    }
+    (
+        last_row.map_or(0, |row| row + 1),
+        last_column.map_or(0, |column| column + 1),
+    )
+}
+
 fn combine_header_rows(rows: &[Vec<String>]) -> Vec<String> {
-    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+    combine_header_rows_with_width(rows, rows.iter().map(Vec::len).max().unwrap_or(0))
+}
+
+fn combine_header_rows_with_width(rows: &[Vec<String>], width: usize) -> Vec<String> {
     normalize_headers((0..width).map(|column| {
         let mut seen = Vec::new();
         for row in rows {
@@ -968,5 +1031,34 @@ mod tests {
                 vec!["c".to_owned()]
             ]
         );
+    }
+
+    #[test]
+    fn xlsx_scan_ignores_formatted_empty_tail() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("formatted-empty-tail.xlsx");
+        let mut workbook = rust_xlsxwriter::Workbook::new();
+        let worksheet = workbook.add_worksheet();
+        let blank_format =
+            rust_xlsxwriter::Format::new().set_background_color(rust_xlsxwriter::Color::Yellow);
+        worksheet.write_string(0, 0, "id").unwrap();
+        worksheet.write_string(1, 0, "001").unwrap();
+        // 模拟 Excel 中“设置过格式但没有内容”的远端单元格。
+        worksheet.write_blank(0, 16_000, &blank_format).unwrap();
+        worksheet
+            .write_blank(50_000, 16_000, &blank_format)
+            .unwrap();
+        workbook.save(&path).unwrap();
+
+        let (tables, warnings) = scan_file(&path).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].headers, vec!["id"]);
+        assert_eq!(tables[0].estimated_rows, 1);
+
+        let mut workbook: Xlsx<BufReader<File>> = open_workbook(&path).unwrap();
+        let bounds = for_each_xlsx_row(&mut workbook, "Sheet1", 0, Some(20), |_| Ok(())).unwrap();
+        assert_eq!(bounds.actual_end, Some((1, 0)));
+        assert_eq!(bounds.actual_columns, Some((0, 0)));
     }
 }

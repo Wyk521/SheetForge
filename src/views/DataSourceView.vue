@@ -91,12 +91,29 @@ async function previewSource(index: number) {
     </div>
 
     <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 12px">
-      <el-input v-model="store.sourceSearch" placeholder="搜索文件名、Sheet 或路径" clearable />
-      <el-button :disabled="!store.hasSources || store.busy" @click="store.selectAll(true)">
-        全选
+      <el-input
+        v-model="store.sourceSearch"
+        placeholder="搜索文件名、Sheet 或路径"
+        clearable
+        style="flex: 1; min-width: 180px"
+      />
+      <span style="color: var(--sf-text-muted); font-size: 11px; white-space: nowrap">
+        <template v-if="store.sourceFilterActive">
+          当前匹配 {{ store.visibleSourceCount }} 张 · 已选 {{ store.visibleEnabledCount }} 张
+        </template>
+        <template v-else>共 {{ store.visibleSourceCount }} 张 · 已选 {{ store.visibleEnabledCount }} 张</template>
+      </span>
+      <el-button
+        :disabled="!store.hasSources || store.busy || (store.sourceFilterActive && store.visibleSourceCount === 0)"
+        @click="store.selectAll(true, store.sourceFilterActive)"
+      >
+        {{ store.sourceFilterActive ? "全选当前结果" : "全选" }}
       </el-button>
-      <el-button :disabled="!store.hasSources || store.busy" @click="store.selectAll(false)">
-        全不选
+      <el-button
+        :disabled="!store.hasSources || store.busy || (store.sourceFilterActive && store.visibleSourceCount === 0)"
+        @click="store.selectAll(false, store.sourceFilterActive)"
+      >
+        {{ store.sourceFilterActive ? "全不选当前结果" : "全不选" }}
       </el-button>
       <el-button :disabled="!store.hasSources || store.busy" @click="store.clearSources()">
         清空
@@ -118,7 +135,7 @@ async function previewSource(index: number) {
             <el-checkbox
               :model-value="group.enabled"
               :disabled="store.busy"
-              @change="(value: boolean | string | number) => store.setGroupEnabled(group.path, Boolean(value))"
+              @change="(value: boolean | string | number) => store.setGroupEnabled(group.path, Boolean(value), store.sourceFilterActive)"
             />
             <span
               style="cursor: pointer; color: var(--sf-primary); font-size: 14px; width: 14px; text-align: center"
@@ -128,7 +145,7 @@ async function previewSource(index: number) {
             </span>
             <span class="sf-row-name">{{ group.fileName }}</span>
             <span class="sf-row-meta">
-              {{ group.tables.length }} 个数据表 · 已选
+              {{ store.sourceFilterActive ? "匹配 " : "" }}{{ group.tables.length }} 个数据表 · 已选
               {{ group.tables.filter((item) => item.table.enabled).length }} 个
             </span>
             <div style="margin-left: auto; display: flex; gap: 8px">

@@ -106,6 +106,19 @@ export const useMergeStore = defineStore("merge", () => {
   const enabledIndices = computed(() =>
     sources.value.map((t, i) => (t.enabled ? i : -1)).filter((i) => i >= 0)
   );
+  const sourceFilterActive = computed(() => sourceSearch.value.trim().length > 0);
+  const visibleSourceIndices = computed(() => {
+    const filter = sourceSearch.value.trim().toLowerCase();
+    if (!filter) return sources.value.map((_, index) => index);
+    return sources.value
+      .map((table, index) => ({ table, index }))
+      .filter(({ table }) => `${table.path} ${table.sheet_name}`.toLowerCase().includes(filter))
+      .map(({ index }) => index);
+  });
+  const visibleSourceCount = computed(() => visibleSourceIndices.value.length);
+  const visibleEnabledCount = computed(
+    () => visibleSourceIndices.value.filter((index) => sources.value[index]?.enabled).length
+  );
   const rowsMetric = computed(() =>
     sources.value
       .filter((t) => t.enabled)
@@ -392,8 +405,17 @@ export const useMergeStore = defineStore("merge", () => {
     void refreshPlan();
   }
 
-  function selectAll(enabled: boolean) {
-    for (const table of sources.value) table.enabled = enabled;
+  function selectAll(enabled: boolean, filtered = false) {
+    const visible = filtered ? new Set(visibleSourceIndices.value) : null;
+    let changed = false;
+    for (const [index, table] of sources.value.entries()) {
+      if (visible && !visible.has(index)) continue;
+      if (table.enabled !== enabled) {
+        table.enabled = enabled;
+        changed = true;
+      }
+    }
+    if (!changed) return;
     if (enabledIndices.value.length > 0) selectedMappingTable.value = enabledIndices.value[0];
     void refreshPlan();
   }
@@ -405,11 +427,17 @@ export const useMergeStore = defineStore("merge", () => {
     collapsedGroups.value = set;
   }
 
-  function setGroupEnabled(path: string, enabled: boolean) {
-    for (const table of sources.value) {
-      if (table.path === path) table.enabled = enabled;
+  function setGroupEnabled(path: string, enabled: boolean, filtered = false) {
+    const visible = filtered ? new Set(visibleSourceIndices.value) : null;
+    let changed = false;
+    for (const [index, table] of sources.value.entries()) {
+      if (table.path !== path || (visible && !visible.has(index))) continue;
+      if (table.enabled !== enabled) {
+        table.enabled = enabled;
+        changed = true;
+      }
     }
-    void refreshPlan();
+    if (changed) void refreshPlan();
   }
 
   async function removeGroup(path: string) {
@@ -942,7 +970,8 @@ export const useMergeStore = defineStore("merge", () => {
     inputLabel, phase, progress, progressLabel, warnings,
     checkIssues, checkRan, preview, previewTitle, settings, updateText, updateUrl,
     collapsedGroups, selectedMappingTable, hideCommonMappings, mismatchOnly,
-    sourceSearch, mappingSearch, mappingScope, onlyMultiField, planHeaders, planCommonKeys,
+    sourceSearch, sourceFilterActive, visibleSourceCount, visibleEnabledCount,
+    mappingSearch, mappingScope, onlyMultiField, planHeaders, planCommonKeys,
     activePage, showAbout,
     // getters
     busy, hasSources, enabledIndices, rowsMetric, sheetsMetric, databaseReady, canStart, fieldGroups, formatNumber,
