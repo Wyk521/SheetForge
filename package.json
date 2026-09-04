@@ -1,11 +1,12 @@
 {
   "name": "sheetforge",
   "private": true,
-  "version": "0.6.15",
+  "version": "0.6.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "test": "node --test tests/titlebar.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

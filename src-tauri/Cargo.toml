@@ -1,6 +1,6 @@
 [package]
 name = "sheetforge"
-version = "0.6.15"
+version = "0.6.16"
 edition = "2021"
 description = "A fast, native Windows GUI for merging Excel and CSV files"
 license = "MIT"

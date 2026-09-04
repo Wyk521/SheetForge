@@ -33,7 +33,7 @@ onUnmounted(() => {
 
 <template>
   <div class="sf-titlebar">
-    <div class="sf-titlebar-drag" data-tauri-drag-region @dblclick="appWindow?.toggleMaximize()">
+    <div class="sf-titlebar-drag" data-tauri-drag-region>
       <span class="sf-titlebar-title" data-tauri-drag-region>表格合并</span>
     </div>
     <div class="sf-titlebar-controls">
