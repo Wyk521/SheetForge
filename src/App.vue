@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from "vue";
+import { nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ElMessage } from "element-plus";
 import TopBar from "./components/TopBar.vue";
@@ -14,6 +14,25 @@ import PreviewView from "./views/PreviewView.vue";
 import { useMergeStore } from "./stores/merge";
 
 const store = useMergeStore();
+const appContent = ref<HTMLElement | null>(null);
+const pageScrollTops = new Map<number, number>();
+
+// 页面用 v-if 切换时，当前视图会被销毁，外层滚动容器的 scrollTop 也会因内容变短而归零。
+// 切页前保存旧页面的位置，切页完成后再恢复目标页面的位置。
+watch(
+  () => store.activePage,
+  (page, previousPage) => {
+    if (previousPage !== undefined && appContent.value) {
+      pageScrollTops.set(previousPage, appContent.value.scrollTop);
+    }
+    void nextTick(() => {
+      if (appContent.value) {
+        appContent.value.scrollTop = pageScrollTops.get(page) ?? 0;
+      }
+    });
+  },
+  { flush: "sync" },
+);
 
 function onKeyDown(event: KeyboardEvent) {
   // 在输入框/文本域/可编辑元素里按快捷键属于正常编辑操作，不触发全局快捷键
@@ -77,7 +96,7 @@ onUnmounted(() => {
   <div class="app-shell">
     <TitleBar />
     <TopBar />
-    <div class="app-content">
+    <div ref="appContent" class="app-content">
       <DataSourceView v-if="store.activePage === 0" />
       <MergeRulesView v-else-if="store.activePage === 1" />
       <PreviewView v-else />
