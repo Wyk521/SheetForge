@@ -452,11 +452,7 @@ fn source_sheet_column_in_the_middle_keeps_data_aligned() {
 #[test]
 fn merged_preview_keeps_each_enabled_source_as_a_group() {
     let dir = tempfile::tempdir().unwrap();
-    let first = scan_csv(
-        &dir,
-        "first.csv",
-        "姓名,城市\n甲,北京\n乙,上海\n丙,广州\n",
-    );
+    let first = scan_csv(&dir, "first.csv", "姓名,城市\n甲,北京\n乙,上海\n丙,广州\n");
     let second = scan_csv(&dir, "second.csv", "姓名,城市\n丁,深圳\n戊,杭州\n");
     let empty = scan_csv(&dir, "empty-preview.csv", "姓名,城市\n");
     let mut disabled = scan_csv(&dir, "disabled-preview.csv", "姓名,城市\n己,南京\n");
@@ -474,12 +470,22 @@ fn merged_preview_keeps_each_enabled_source_as_a_group() {
     assert_eq!(preview.groups[0].source_index, 0);
     assert_eq!(preview.groups[0].source_file, "first.csv");
     assert_eq!(preview.groups[0].source_sheet, "CSV");
-    assert_eq!(preview.groups[0].rows.len(), 2, "每个来源单独受样本行数限制");
+    assert_eq!(
+        preview.groups[0].rows.len(),
+        2,
+        "每个来源单独受样本行数限制"
+    );
     assert_eq!(preview.groups[1].source_index, 1);
     assert_eq!(preview.groups[1].rows.len(), 2);
     assert_eq!(preview.groups[2].source_index, 2);
-    assert!(preview.groups[2].rows.is_empty(), "空数据表也应显示来源分组");
-    assert!(preview.groups.iter().all(|group| group.source_file != "disabled-preview.csv"));
+    assert!(
+        preview.groups[2].rows.is_empty(),
+        "空数据表也应显示来源分组"
+    );
+    assert!(preview
+        .groups
+        .iter()
+        .all(|group| group.source_file != "disabled-preview.csv"));
 }
 
 #[test]
