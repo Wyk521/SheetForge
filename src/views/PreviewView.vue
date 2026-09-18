@@ -68,7 +68,7 @@ async function exportReport() {
     <template v-if="subTab === 0">
       <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px">
         <span style="font-size: 11px; color: var(--sf-text-muted)">
-          按来源表分组显示所有已选数据表，每张表前 5 行；左侧来源列仅用于定位，不改变正式导出字段
+          所有已选数据表连续显示，每张表前 5 行；表头只显示一次，来源切换处用分隔线区分
         </span>
         <el-tag
           v-if="store.options.mode === 'Consolidate' || store.options.mode === 'Join'"

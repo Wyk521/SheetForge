@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type { MergedPreview, MergedPreviewGroup } from "../types";
 
 const props = withDefaults(
@@ -9,18 +10,58 @@ const props = withDefaults(
   { maxHeight: 430 }
 );
 
-function rowsData(group: MergedPreviewGroup) {
-  return group.rows.map((row, index) => {
-    const record: Record<string, string> = {
-      __line: String(index + 1),
-      __source_file: group.source_file,
-      __source_sheet: group.source_sheet,
-    };
-    row.forEach((cell, column) => {
-      record[String(column)] = cell;
+interface MergedPreviewRow {
+  [key: string]: string | number | boolean;
+  __line: string;
+  __source_file: string;
+  __source_sheet: string;
+  __group_index: number;
+  __group_start: boolean;
+  __empty: boolean;
+}
+
+const previewRows = computed<MergedPreviewRow[]>(() => {
+  if (!props.preview) return [];
+
+  return props.preview.groups.flatMap((group: MergedPreviewGroup, groupIndex) => {
+    if (group.rows.length === 0) {
+      return [
+        {
+          __line: "空表",
+          __source_file: group.source_file,
+          __source_sheet: group.source_sheet,
+          __group_index: groupIndex,
+          __group_start: true,
+          __empty: true,
+        },
+      ];
+    }
+
+    return group.rows.map((row, rowIndex) => {
+      const record: MergedPreviewRow = {
+        __line: String(rowIndex + 1),
+        __source_file: group.source_file,
+        __source_sheet: group.source_sheet,
+        __group_index: groupIndex,
+        __group_start: rowIndex === 0,
+        __empty: false,
+      };
+      row.forEach((cell, column) => {
+        record[String(column)] = cell;
+      });
+      return record;
     });
-    return record;
   });
+});
+
+function rowClassName({ row }: { row: MergedPreviewRow }) {
+  return [
+    row.__group_start ? "sf-merged-preview-group-start" : "",
+    row.__group_index % 2 === 1 ? "sf-merged-preview-alternate" : "",
+    row.__empty ? "sf-merged-preview-empty-row" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 </script>
 
@@ -29,57 +70,57 @@ function rowsData(group: MergedPreviewGroup) {
     <div v-if="preview.groups.length === 0" class="sf-merged-preview-empty">
       没有已选中的数据表，请先在数据源中勾选要参与合并的表。
     </div>
-    <div
-      v-for="(group, groupIndex) in preview.groups"
-      :key="group.source_index"
-      class="sf-merged-preview-group"
-      :class="{ alternate: groupIndex % 2 === 1 }"
+    <el-table
+      v-else
+      class="sf-merged-preview-table"
+      :data="previewRows"
+      size="small"
+      border
+      stripe
+      :row-class-name="rowClassName"
+      :max-height="props.maxHeight"
     >
-      <el-table
-        v-if="group.rows.length > 0"
-        :data="rowsData(group)"
-        size="small"
-        border
-        stripe
-        :max-height="props.maxHeight"
-      >
-        <el-table-column prop="__source_file" label="来源表名" width="180" fixed="left" show-overflow-tooltip />
-        <el-table-column prop="__source_sheet" label="来源 Sheet" width="130" fixed="left" show-overflow-tooltip />
-        <el-table-column prop="__line" label="#" width="52" fixed="left" align="right" />
-        <el-table-column
-          v-for="(header, column) in preview.headers"
-          :key="column"
-          :prop="String(column)"
-          :label="header"
-          min-width="120"
-          show-overflow-tooltip
-        />
-      </el-table>
-      <div v-else class="sf-merged-preview-no-rows">该来源表没有可显示的数据行。</div>
-    </div>
+      <el-table-column prop="__source_file" label="来源表名" width="180" fixed="left" show-overflow-tooltip />
+      <el-table-column prop="__source_sheet" label="来源 Sheet" width="130" fixed="left" show-overflow-tooltip />
+      <el-table-column prop="__line" label="#" width="52" fixed="left" align="right" />
+      <el-table-column
+        v-for="(header, column) in preview.headers"
+        :key="column"
+        :prop="String(column)"
+        :label="header"
+        min-width="120"
+        show-overflow-tooltip
+      />
+    </el-table>
   </div>
 </template>
 
 <style scoped>
 .sf-merged-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  min-width: 0;
 }
 
-.sf-merged-preview-group {
-  overflow: hidden;
-  border: 1px solid var(--sf-border);
-  border-left: 4px solid var(--sf-primary);
-  border-radius: 8px;
-  background: var(--sf-bg-card);
+.sf-merged-preview-table {
+  width: 100%;
 }
 
-.sf-merged-preview-group.alternate {
-  border-left-color: #67c23a;
+:deep(.sf-merged-preview-group-start > td) {
+  border-top: 2px solid var(--sf-primary) !important;
 }
 
-.sf-merged-preview-no-rows,
+:deep(.sf-merged-preview-group-start.sf-merged-preview-alternate > td) {
+  border-top-color: #67c23a !important;
+}
+
+:deep(.sf-merged-preview-alternate:not(.sf-merged-preview-group-start) > td) {
+  background: #fbfdf9;
+}
+
+:deep(.sf-merged-preview-empty-row > td) {
+  color: var(--sf-text-muted);
+  font-style: italic;
+}
+
 .sf-merged-preview-empty {
   padding: 22px;
   color: var(--sf-text-muted);

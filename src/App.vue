@@ -18,8 +18,8 @@ const store = useMergeStore();
 const appContent = ref<HTMLElement | null>(null);
 const pageScrollTops = new Map<number, number>();
 
-// 页面用 v-if 切换时，当前视图会被销毁，外层滚动容器的 scrollTop 也会因内容变短而归零。
-// 切页前保存旧页面的位置，切页完成后再恢复目标页面的位置。
+// 页面保持挂载，切页只切换可见性，避免大型字段表和预览表反复销毁/重建造成卡顿。
+// 每个页面仍保存自己的滚动位置，切回时恢复到上次阅读位置。
 watch(
   () => store.activePage,
   (page, previousPage) => {
@@ -99,9 +99,9 @@ onUnmounted(() => {
     <TitleBar />
     <TopBar />
     <div ref="appContent" class="app-content">
-      <DataSourceView v-if="store.activePage === 0" />
-      <MergeRulesView v-else-if="store.activePage === 1" />
-      <PreviewView v-else />
+      <DataSourceView v-show="store.activePage === 0" />
+      <MergeRulesView v-show="store.activePage === 1" />
+      <PreviewView v-show="store.activePage === 2" />
     </div>
     <BottomBar />
     <AboutDialog />

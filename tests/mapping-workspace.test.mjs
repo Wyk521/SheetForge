@@ -64,8 +64,10 @@ test("输出预览按来源表分组，并为每个来源单独抽样", async ()
   assert.match(preview, /每张表前 5 行/);
   assert.match(grid, /label="来源表名"/);
   assert.match(grid, /label="来源 Sheet"/);
-  assert.match(grid, /sf-merged-preview-group/);
+  assert.match(grid, /sf-merged-preview-group-start/);
+  assert.match(grid, /:row-class-name="rowClassName"/);
   assert.doesNotMatch(grid, /sf-merged-preview-heading/);
+  assert.doesNotMatch(grid, /v-for="\(group, groupIndex\) in preview\.groups"/);
 });
 
 test("默认窗口宽度下映射区保持可见并为源表操作保留空间", async () => {
@@ -80,6 +82,16 @@ test("默认窗口宽度下映射区保持可见并为源表操作保留空间",
   assert.match(fieldBatch, /sf-field-table-wrap/);
   assert.match(fieldBatch, /sf-source-preview-action/);
   assert.match(fieldBatch, /title="预览源表"/);
+});
+
+test("页面切换保持视图挂载，避免重复创建大型表格", async () => {
+  const app = await read("src/App.vue");
+
+  assert.match(app, /<DataSourceView v-show="store\.activePage === 0"\s*\/>/);
+  assert.match(app, /<MergeRulesView v-show="store\.activePage === 1"\s*\/>/);
+  assert.match(app, /<PreviewView v-show="store\.activePage === 2"\s*\/>/);
+  assert.doesNotMatch(app, /<DataSourceView v-if=/);
+  assert.doesNotMatch(app, /<MergeRulesView v-else-if=/);
 });
 
 test("导航和输出预览不再使用第一二三步文案", async () => {
