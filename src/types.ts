@@ -52,6 +52,18 @@ export interface PreviewTable {
   rows: string[][];
 }
 
+export interface MergedPreviewGroup {
+  source_index: number;
+  source_file: string;
+  source_sheet: string;
+  rows: string[][];
+}
+
+export interface MergedPreview {
+  headers: string[];
+  groups: MergedPreviewGroup[];
+}
+
 export interface CheckIssue {
   level: IssueLevel;
   title: string;

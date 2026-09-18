@@ -16,6 +16,20 @@ pub struct PreviewTable {
     pub rows: Vec<Vec<String>>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct MergedPreviewGroup {
+    pub source_index: usize,
+    pub source_file: String,
+    pub source_sheet: String,
+    pub rows: Vec<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MergedPreview {
+    pub headers: Vec<String>,
+    pub groups: Vec<MergedPreviewGroup>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum IssueLevel {
     Info,
@@ -84,15 +98,13 @@ pub fn preview_merged(
     tables: &[SourceTable],
     options: &MergeOptions,
     limit: usize,
-) -> Result<PreviewTable> {
+) -> Result<MergedPreview> {
     let plan = build_output_plan(tables, options);
-    let mut rows = Vec::new();
-    for table in tables.iter().filter(|table| table.enabled) {
-        if rows.len() >= limit {
-            break;
-        }
-        let preview = preview_source(table, limit - rows.len())?;
+    let mut groups = Vec::new();
+    for (source_index, table) in tables.iter().enumerate().filter(|(_, table)| table.enabled) {
+        let preview = preview_source(table, limit)?;
         let mapping = source_to_output_map(table, &plan, options.mode);
+        let mut rows = Vec::with_capacity(preview.rows.len());
         for source_row in preview.rows {
             let mut output = vec![String::new(); plan.headers.len()];
             for (source, target) in &mapping {
@@ -112,10 +124,20 @@ pub fn preview_merged(
             }
             rows.push(output);
         }
+        groups.push(MergedPreviewGroup {
+            source_index,
+            source_file: table
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            source_sheet: table.sheet_name.clone(),
+            rows,
+        });
     }
-    Ok(PreviewTable {
+    Ok(MergedPreview {
         headers: plan.headers,
-        rows,
+        groups,
     })
 }
 

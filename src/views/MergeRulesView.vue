@@ -121,7 +121,7 @@ function onModeChange(mode: MergeMode) {
           <template v-if="mappingEnabled">
             <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px">字段映射与输出顺序</div>
             <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 10px">
-              按来源字段集中编辑；展开字段即可直接预览来源表，预览不会离开当前工作区。
+              按来源字段集中编辑；展开字段后点击“预览源表”即可在当前工作区查看源表样本。
             </div>
             <FieldBatchView />
           </template>

@@ -46,7 +46,7 @@ const filteredGroups = computed(() => {
       <el-input v-model="store.mappingSearch" placeholder="搜索字段" style="width: 200px" clearable />
       <el-checkbox v-model="store.onlyMultiField">只看多表字段</el-checkbox>
       <span style="flex: 1; font-size: 11px; color: var(--sf-text-muted); text-align: right">
-        按来源字段分组，改动会同步到所有启用表；展开后可直接预览来源表
+        按来源字段分组，改动会同步到所有启用表；展开后点击“预览源表”即可在当前工作区查看
       </span>
     </div>
     <el-table v-if="filteredGroups.length > 0" :data="filteredGroups" size="small" border>
@@ -61,16 +61,21 @@ const filteredGroups = computed(() => {
               :key="source.index"
               style="display: flex; align-items: center; gap: 8px; min-height: 30px"
             >
-              <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+              <span
+                style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer"
+                title="点击预览此来源表"
+                @click.stop="store.showSourcePreview(source.index)"
+              >
                 {{ source.name }}
               </span>
               <el-button
                 size="small"
-                text
+                type="primary"
+                plain
                 :disabled="store.busy"
                 @click.stop="store.showSourcePreview(source.index)"
               >
-                预览
+                预览源表
               </el-button>
             </div>
           </div>

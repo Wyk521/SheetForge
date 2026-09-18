@@ -4,7 +4,7 @@ import { ElMessage } from "element-plus";
 import { save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { useMergeStore } from "../stores/merge";
-import PreviewTableGrid from "../components/PreviewTableGrid.vue";
+import MergedPreviewGrid from "../components/MergedPreviewGrid.vue";
 
 const store = useMergeStore();
 const subTab = ref(0); // 0 合并结果预览 / 1 检查报告
@@ -68,7 +68,7 @@ async function exportReport() {
     <template v-if="subTab === 0">
       <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px">
         <span style="font-size: 11px; color: var(--sf-text-muted)">
-          按当前规则显示前 30 行；正式导出仍采用流式处理
+          按来源表分组显示所有已选数据表，每张表前 5 行；左侧来源列仅用于定位，不改变正式导出字段
         </span>
         <el-tag
           v-if="store.options.mode === 'Consolidate' || store.options.mode === 'Join'"
@@ -82,10 +82,13 @@ async function exportReport() {
               : "预览未体现关联结果，仅供列结构参考"
           }}
         </el-tag>
+        <el-tag v-if="store.preview" type="info" size="small" effect="plain">
+          {{ store.preview.groups.length }} 张来源表
+        </el-tag>
         <el-button style="margin-left: auto" @click="store.showMergedPreview()">刷新预览</el-button>
       </div>
       <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px">{{ store.previewTitle }}</div>
-      <PreviewTableGrid v-if="store.preview" :preview="store.preview" />
+      <MergedPreviewGrid v-if="store.preview" :preview="store.preview" />
       <div v-else style="color: var(--sf-text-muted); font-size: 12px; padding: 40px 0; text-align: center">
         点击「刷新预览」生成合并结果预览
       </div>

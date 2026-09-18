@@ -2,6 +2,7 @@
 // 覆盖刁钻场景：编码（BOM/GBK）、长数字保真、空文件、单列、多行表头、
 // 日期/布尔单元格、去重、筛选、三种关联、汇总求和、来源列、预检校验等。
 use crate::inspect::preflight_for_destination;
+use crate::inspect::preview_merged;
 use crate::merge::merge_tables;
 use crate::model::{AggregateOp, JoinKind, MergeMode, MergeOptions, SourceTable, TransformOp};
 use crate::scan::scan_file;
@@ -446,6 +447,39 @@ fn source_sheet_column_in_the_middle_keeps_data_aligned() {
         vec!["张三", "CSV", "北京"],
         "来源列在中间时，前后列的数据不能错位"
     );
+}
+
+#[test]
+fn merged_preview_keeps_each_enabled_source_as_a_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = scan_csv(
+        &dir,
+        "first.csv",
+        "姓名,城市\n甲,北京\n乙,上海\n丙,广州\n",
+    );
+    let second = scan_csv(&dir, "second.csv", "姓名,城市\n丁,深圳\n戊,杭州\n");
+    let empty = scan_csv(&dir, "empty-preview.csv", "姓名,城市\n");
+    let mut disabled = scan_csv(&dir, "disabled-preview.csv", "姓名,城市\n己,南京\n");
+    disabled.enabled = false;
+
+    let preview = preview_merged(
+        &[first, second, empty, disabled],
+        &MergeOptions::default(),
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(preview.headers, vec!["姓名", "城市"]);
+    assert_eq!(preview.groups.len(), 3, "每个启用来源都应保留一个分组");
+    assert_eq!(preview.groups[0].source_index, 0);
+    assert_eq!(preview.groups[0].source_file, "first.csv");
+    assert_eq!(preview.groups[0].source_sheet, "CSV");
+    assert_eq!(preview.groups[0].rows.len(), 2, "每个来源单独受样本行数限制");
+    assert_eq!(preview.groups[1].source_index, 1);
+    assert_eq!(preview.groups[1].rows.len(), 2);
+    assert_eq!(preview.groups[2].source_index, 2);
+    assert!(preview.groups[2].rows.is_empty(), "空数据表也应显示来源分组");
+    assert!(preview.groups.iter().all(|group| group.source_file != "disabled-preview.csv"));
 }
 
 #[test]

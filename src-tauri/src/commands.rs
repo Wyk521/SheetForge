@@ -2,7 +2,7 @@ use crate::config::{self, MergeScheme};
 use crate::database::{self, DatabaseImportRequest, DatabaseProfilesDto};
 use crate::inspect::{
     preview_merged as inspect_preview_merged, preview_source as inspect_preview_source,
-    PreviewTable,
+    MergedPreview, PreviewTable,
 };
 use crate::merge::{spawn_merge, spawn_preflight};
 use crate::model::{build_output_plan, common_header_keys, MergeOptions, SourceTable};
@@ -182,7 +182,7 @@ pub fn preview_merged(
     tables: Vec<SourceTable>,
     options: MergeOptions,
     limit: usize,
-) -> Result<PreviewTable, String> {
+) -> Result<MergedPreview, String> {
     inspect_preview_merged(&tables, &options, limit).map_err(|error| format!("{error:#}"))
 }
 

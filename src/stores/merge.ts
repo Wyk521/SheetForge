@@ -21,6 +21,7 @@ import {
   type MergeOptions,
   type MergeProgress,
   type MergeScheme,
+  type MergedPreview,
   type OutputDestination,
   type PreflightDone,
   type PreviewTable,
@@ -88,7 +89,7 @@ export const useMergeStore = defineStore("merge", () => {
   const warnings = ref<string[]>([]);
   const checkIssues = ref<CheckIssue[]>([]);
   const checkRan = ref(false);
-  const preview = ref<PreviewTable | null>(null);
+  const preview = ref<MergedPreview | null>(null);
   const previewTitle = ref("");
   const sourcePreview = ref<PreviewTable | null>(null);
   const sourcePreviewTitle = ref("");
@@ -106,6 +107,13 @@ export const useMergeStore = defineStore("merge", () => {
   const activePage = ref(0);
   const showAbout = ref(false);
   let sourcePreviewRequest = 0;
+  let mergedPreviewRequest = 0;
+
+  function clearMergedPreview() {
+    mergedPreviewRequest += 1;
+    preview.value = null;
+    previewTitle.value = "";
+  }
 
   // ---- 派生 ----
   const busy = computed(() => phase.value !== "ready");
@@ -345,7 +353,7 @@ export const useMergeStore = defineStore("merge", () => {
     progressLabel.value = scanAppend.value ? "正在追加并读取新文件…" : "正在读取文件并自动识别表头…";
     inputLabel.value = path;
     warnings.value = [];
-    preview.value = null;
+    clearMergedPreview();
     closeSourcePreview();
     checkIssues.value = [];
     checkRan.value = false;
@@ -368,7 +376,7 @@ export const useMergeStore = defineStore("merge", () => {
     progressLabel.value = scanAppend.value ? "正在追加并读取新文件…" : "正在读取文件并自动识别表头…";
     inputLabel.value = `已选择 ${paths.length} 个文件`;
     warnings.value = [];
-    preview.value = null;
+    clearMergedPreview();
     closeSourcePreview();
     checkIssues.value = [];
     checkRan.value = false;
@@ -389,7 +397,7 @@ export const useMergeStore = defineStore("merge", () => {
     }
     sources.value = [];
     warnings.value = [];
-    preview.value = null;
+    clearMergedPreview();
     closeSourcePreview();
     checkIssues.value = [];
     checkRan.value = false;
@@ -637,15 +645,19 @@ export const useMergeStore = defineStore("merge", () => {
   }
 
   async function showMergedPreview() {
+    const request = ++mergedPreviewRequest;
     try {
-      const result = await invoke<PreviewTable>("preview_merged", {
+      const result = await invoke<MergedPreview>("preview_merged", {
         tables: sources.value,
         options: options.value,
-        limit: 30,
+        limit: 5,
       });
+      if (request !== mergedPreviewRequest) return;
       preview.value = result;
-      previewTitle.value = `合并结果预览 · ${result.headers.length} 列 · 前 ${result.rows.length} 行`;
+      const rowCount = result.groups.reduce((total, group) => total + group.rows.length, 0);
+      previewTitle.value = `按来源预览 · ${result.groups.length} 张表 · 每张前 5 行 · ${result.headers.length} 列 · 共 ${rowCount} 行`;
     } catch (error) {
+      if (request !== mergedPreviewRequest) return;
       ElMessage.error(`结果预览失败：${error}`);
     }
   }
@@ -755,7 +767,7 @@ export const useMergeStore = defineStore("merge", () => {
       const scheme = await invoke<MergeScheme>("open_scheme", { path });
       sources.value = scheme.tables;
       options.value = scheme.options;
-      preview.value = null;
+      clearMergedPreview();
       closeSourcePreview();
       inputLabel.value = `已打开方案：${path}`;
       checkIssues.value = [];
@@ -812,7 +824,7 @@ export const useMergeStore = defineStore("merge", () => {
       }),
       await listen<TableReloaded>("table-reloaded", (e) => {
         if (sources.value[e.payload.index]) sources.value[e.payload.index] = e.payload.table;
-        preview.value = null;
+        clearMergedPreview();
         closeSourcePreview();
         checkIssues.value = [];
         checkRan.value = false;
@@ -824,7 +836,7 @@ export const useMergeStore = defineStore("merge", () => {
         for (const item of e.payload.tables) {
           if (sources.value[item.index]) sources.value[item.index] = item.table;
         }
-        preview.value = null;
+        clearMergedPreview();
         closeSourcePreview();
         checkIssues.value = [];
         checkRan.value = false;
