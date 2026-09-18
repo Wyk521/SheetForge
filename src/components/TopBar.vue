@@ -13,9 +13,9 @@ const store = useMergeStore();
       class="sf-nav"
       @select="(index: string) => (store.activePage = Number(index))"
     >
-      <el-menu-item index="0">01 数据源</el-menu-item>
-      <el-menu-item index="1">02 合并规则</el-menu-item>
-      <el-menu-item index="2">03 预览与检查</el-menu-item>
+      <el-menu-item index="0">数据源</el-menu-item>
+      <el-menu-item index="1">合并工作区</el-menu-item>
+      <el-menu-item index="2">输出预览</el-menu-item>
     </el-menu>
     <div style="flex: 1"></div>
     <el-button text :disabled="!store.hasSources || store.busy" @click="store.saveScheme()">

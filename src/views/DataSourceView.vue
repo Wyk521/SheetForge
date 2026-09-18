@@ -51,7 +51,6 @@ async function onRecentScheme(value: string) {
 
 async function previewSource(index: number) {
   await store.showSourcePreview(index);
-  store.activePage = 2;
 }
 </script>
 

@@ -9,6 +9,7 @@ import {
   defaultDatabaseImportOptions,
   defaultOptions,
   type AppSettings,
+  type AggregateOp,
   type CheckIssue,
   type ColumnMapping,
   type ConnectionInfo,
@@ -42,14 +43,20 @@ const MODE_LABELS: Record<string, string> = {
   Join: "横向关联",
 };
 
-/** 「按字段改表」视图中的一组同名字段（按原始来源表头分组） */
+/** 字段映射工作区中的一组同名字段（按原始来源表头分组） */
+export interface FieldGroupSource {
+  index: number;
+  name: string;
+}
+
 export interface FieldGroup {
   key: string;
   count: number;
-  tables: string[];
+  tables: FieldGroupSource[];
   uniformTarget: string | null;
   uniformEnabled: boolean | null;
-  uniformTransform: string | null;
+  uniformTransform: TransformOp | null;
+  uniformAggregate: AggregateOp | null;
 }
 
 // 与 Rust 端 header_key 保持一致：换行只是 Excel 单元格的显示换行，
@@ -83,29 +90,26 @@ export const useMergeStore = defineStore("merge", () => {
   const checkRan = ref(false);
   const preview = ref<PreviewTable | null>(null);
   const previewTitle = ref("");
+  const sourcePreview = ref<PreviewTable | null>(null);
+  const sourcePreviewTitle = ref("");
+  const sourcePreviewVisible = ref(false);
+  const sourcePreviewLoading = ref(false);
   const settings = ref<AppSettings | null>(null);
   const updateText = ref("检查更新");
   const updateUrl = ref<string | null>(null);
   const collapsedGroups = ref<Set<string>>(new Set());
-  const selectedMappingTable = ref(0);
-  const hideCommonMappings = ref(false);
-  const mismatchOnly = ref(false);
   const sourceSearch = ref("");
   const mappingSearch = ref("");
-  const mappingScope = ref<"table" | "field">("table");
   const onlyMultiField = ref(false);
   const planHeaders = ref<string[]>([]);
-  const planCommonKeys = ref<Set<string>>(new Set());
   const scanAppend = ref(false);
   const activePage = ref(0);
   const showAbout = ref(false);
+  let sourcePreviewRequest = 0;
 
   // ---- 派生 ----
   const busy = computed(() => phase.value !== "ready");
   const hasSources = computed(() => sources.value.length > 0);
-  const enabledIndices = computed(() =>
-    sources.value.map((t, i) => (t.enabled ? i : -1)).filter((i) => i >= 0)
-  );
   const sourceFilterActive = computed(() => sourceSearch.value.trim().length > 0);
   const visibleSourceIndices = computed(() => {
     const filter = sourceSearch.value.trim().toLowerCase();
@@ -146,13 +150,14 @@ export const useMergeStore = defineStore("merge", () => {
       string,
       {
         key: string;
-        tables: string[];
+        tables: FieldGroupSource[];
         targets: Map<string, string>;
         enables: Set<boolean>;
-        transforms: Set<string>;
+        transforms: Set<TransformOp>;
+        aggregates: Set<AggregateOp>;
       }
     >();
-    for (const table of sources.value) {
+    for (const [index, table] of sources.value.entries()) {
       if (!table.enabled) continue;
       for (const mapping of table.mappings) {
         const key = headerKey(mapping.source_name);
@@ -164,14 +169,16 @@ export const useMergeStore = defineStore("merge", () => {
             targets: new Map(),
             enables: new Set(),
             transforms: new Set(),
+            aggregates: new Set(),
           };
           byKey.set(key, group);
         }
-        group.tables.push(displayName(table));
+        group.tables.push({ index, name: displayName(table) });
         const target = mapping.target_name.trim();
         group.targets.set(headerKey(target), target);
         group.enables.add(mapping.enabled);
         group.transforms.add(mapping.transform);
+        group.aggregates.add(mapping.aggregate);
       }
     }
     const outputPositions = new Map(
@@ -197,6 +204,7 @@ export const useMergeStore = defineStore("merge", () => {
         uniformTarget: g.targets.size === 1 ? [...g.targets.values()][0] : null,
         uniformEnabled: g.enables.size === 1 ? [...g.enables][0] : null,
         uniformTransform: g.transforms.size === 1 ? [...g.transforms][0] : null,
+        uniformAggregate: g.aggregates.size === 1 ? [...g.aggregates][0] : null,
       }));
   });
 
@@ -223,15 +231,13 @@ export const useMergeStore = defineStore("merge", () => {
 
   async function refreshPlan() {
     try {
-      const plan = await invoke<{ headers: string[]; common_keys: string[] }>("get_plan", {
+      const plan = await invoke<{ headers: string[] }>("get_plan", {
         tables: sources.value,
         options: options.value,
       });
       planHeaders.value = plan.headers;
-      planCommonKeys.value = new Set(plan.common_keys);
     } catch (error) {
       planHeaders.value = [];
-      planCommonKeys.value = new Set();
     }
   }
 
@@ -340,6 +346,7 @@ export const useMergeStore = defineStore("merge", () => {
     inputLabel.value = path;
     warnings.value = [];
     preview.value = null;
+    closeSourcePreview();
     checkIssues.value = [];
     checkRan.value = false;
     try {
@@ -362,6 +369,7 @@ export const useMergeStore = defineStore("merge", () => {
     inputLabel.value = `已选择 ${paths.length} 个文件`;
     warnings.value = [];
     preview.value = null;
+    closeSourcePreview();
     checkIssues.value = [];
     checkRan.value = false;
     try {
@@ -382,6 +390,7 @@ export const useMergeStore = defineStore("merge", () => {
     sources.value = [];
     warnings.value = [];
     preview.value = null;
+    closeSourcePreview();
     checkIssues.value = [];
     checkRan.value = false;
     collapsedGroups.value = new Set();
@@ -399,9 +408,6 @@ export const useMergeStore = defineStore("merge", () => {
   function toggleSourceEnabled(index: number, enabled: boolean) {
     const table = sources.value[index];
     if (table) table.enabled = enabled;
-    if (enabledIndices.value.length > 0 && !enabledIndices.value.includes(selectedMappingTable.value)) {
-      selectedMappingTable.value = enabledIndices.value[0];
-    }
     void refreshPlan();
   }
 
@@ -417,7 +423,6 @@ export const useMergeStore = defineStore("merge", () => {
       }
     }
     if (!changed) return;
-    if (enabledIndices.value.length > 0) selectedMappingTable.value = enabledIndices.value[0];
     void refreshPlan();
   }
 
@@ -448,6 +453,7 @@ export const useMergeStore = defineStore("merge", () => {
     } catch {
       return;
     }
+    closeSourcePreview();
     sources.value = sources.value.filter((t) => t.path !== path);
     const set = new Set(collapsedGroups.value);
     set.delete(path);
@@ -463,6 +469,7 @@ export const useMergeStore = defineStore("merge", () => {
     } catch {
       return;
     }
+    closeSourcePreview();
     sources.value.splice(index, 1);
     void refreshPlan();
   }
@@ -545,67 +552,7 @@ export const useMergeStore = defineStore("merge", () => {
     if (index >= 0) moveOutputColumn(index, direction);
   }
 
-  function selectedTable(): SourceTable | undefined {
-    return sources.value[selectedMappingTable.value];
-  }
-
-  function setMapping(index: number, enabled: boolean, target: string) {
-    const table = selectedTable();
-    const mapping = table?.mappings[index];
-    if (mapping) {
-      replaceOutputOrderName(mapping.target_name, target);
-      mapping.enabled = enabled;
-      mapping.target_name = target;
-    }
-    void refreshPlan();
-  }
-
-  function setMappingOperation(index: number, transform: number, aggregate: number) {
-    const table = selectedTable();
-    const mapping = table?.mappings[index];
-    if (!mapping) return;
-    const transforms = ["None", "Trim", "Uppercase", "Lowercase"] as const;
-    const aggregates = ["First", "Sum", "UniqueJoin", "TextJoin"] as const;
-    mapping.transform = transforms[transform] ?? "None";
-    mapping.aggregate = aggregates[aggregate] ?? "First";
-    void refreshPlan();
-  }
-
-  async function resetMapping() {
-    const table = selectedTable();
-    if (!table) return;
-    try {
-      await ElMessageBox.confirm(`确定恢复“${displayName(table)}”的所有字段映射？`, "确认操作", { type: "warning" });
-    } catch {
-      return;
-    }
-    for (const mapping of table.mappings) {
-      replaceOutputOrderName(mapping.target_name, mapping.source_name);
-      mapping.target_name = mapping.source_name;
-      mapping.enabled = true;
-      mapping.transform = "None";
-      mapping.aggregate = "First";
-    }
-    void refreshPlan();
-  }
-
-  async function applySuggestions() {
-    const suggestions = await invoke<Record<string, string>>("get_suggestions", {
-      tables: sources.value,
-    });
-    for (const table of sources.value) {
-      for (const mapping of table.mappings) {
-        const target = suggestions[mapping.source_name];
-        if (target) {
-          replaceOutputOrderName(mapping.target_name, target);
-          mapping.target_name = target;
-        }
-      }
-    }
-    void refreshPlan();
-  }
-
-  // ---- 按字段批量操作（作用于所有启用表中同名来源字段的映射） ----
+  // ---- 字段批量操作（作用于所有启用表中同名来源字段的映射） ----
   function forEachFieldMapping(key: string, fn: (mapping: ColumnMapping) => void) {
     const wantedKey = headerKey(key);
     for (const table of sources.value) {
@@ -640,12 +587,20 @@ export const useMergeStore = defineStore("merge", () => {
     void refreshPlan();
   }
 
+  function setFieldAggregate(key: string, aggregate: AggregateOp) {
+    forEachFieldMapping(key, (mapping) => {
+      mapping.aggregate = aggregate;
+    });
+    void refreshPlan();
+  }
+
   function resetField(key: string) {
     forEachFieldMapping(key, (mapping) => replaceOutputOrderName(mapping.target_name, mapping.source_name));
     forEachFieldMapping(key, (mapping) => {
       mapping.target_name = mapping.source_name;
       mapping.enabled = true;
       mapping.transform = "None";
+      mapping.aggregate = "First";
     });
     void refreshPlan();
   }
@@ -654,13 +609,31 @@ export const useMergeStore = defineStore("merge", () => {
   async function showSourcePreview(index: number) {
     const table = sources.value[index];
     if (!table) return;
+    const request = ++sourcePreviewRequest;
+    sourcePreviewVisible.value = true;
+    sourcePreviewLoading.value = true;
+    sourcePreview.value = null;
+    sourcePreviewTitle.value = `${displayName(table)} · 正在读取…`;
     try {
       const result = await invoke<PreviewTable>("preview_source", { table, limit: 30 });
-      preview.value = result;
-      previewTitle.value = `${displayName(table)} · 前 ${result.rows.length} 行`;
+      if (request !== sourcePreviewRequest) return;
+      sourcePreview.value = result;
+      sourcePreviewTitle.value = `${displayName(table)} · 前 ${result.rows.length} 行`;
     } catch (error) {
+      if (request !== sourcePreviewRequest) return;
+      sourcePreviewVisible.value = false;
       ElMessage.error(`预览失败：${error}`);
+    } finally {
+      if (request === sourcePreviewRequest) sourcePreviewLoading.value = false;
     }
+  }
+
+  function closeSourcePreview() {
+    sourcePreviewRequest += 1;
+    sourcePreviewVisible.value = false;
+    sourcePreviewLoading.value = false;
+    sourcePreview.value = null;
+    sourcePreviewTitle.value = "";
   }
 
   async function showMergedPreview() {
@@ -782,7 +755,8 @@ export const useMergeStore = defineStore("merge", () => {
       const scheme = await invoke<MergeScheme>("open_scheme", { path });
       sources.value = scheme.tables;
       options.value = scheme.options;
-      selectedMappingTable.value = enabledIndices.value[0] ?? 0;
+      preview.value = null;
+      closeSourcePreview();
       inputLabel.value = `已打开方案：${path}`;
       checkIssues.value = [];
       checkRan.value = false;
@@ -827,7 +801,6 @@ export const useMergeStore = defineStore("merge", () => {
           options.value.output_order = [];
         }
         warnings.value = e.payload.warnings;
-        selectedMappingTable.value = enabledIndices.value[0] ?? 0;
         phase.value = "ready";
         progress.value = 1;
         progressLabel.value = `已识别 ${sources.value.length} 个数据表`;
@@ -839,8 +812,8 @@ export const useMergeStore = defineStore("merge", () => {
       }),
       await listen<TableReloaded>("table-reloaded", (e) => {
         if (sources.value[e.payload.index]) sources.value[e.payload.index] = e.payload.table;
-        selectedMappingTable.value = e.payload.index;
         preview.value = null;
+        closeSourcePreview();
         checkIssues.value = [];
         checkRan.value = false;
         phase.value = "ready";
@@ -852,6 +825,7 @@ export const useMergeStore = defineStore("merge", () => {
           if (sources.value[item.index]) sources.value[item.index] = item.table;
         }
         preview.value = null;
+        closeSourcePreview();
         checkIssues.value = [];
         checkRan.value = false;
         phase.value = "ready";
@@ -970,21 +944,19 @@ export const useMergeStore = defineStore("merge", () => {
     databaseConfigPath, databaseLastResult, showDatabaseDialog, showDatabaseConnectionsDialog,
     inputLabel, phase, progress, progressLabel, warnings,
     checkIssues, checkRan, preview, previewTitle, settings, updateText, updateUrl,
-    collapsedGroups, selectedMappingTable, hideCommonMappings, mismatchOnly,
-    sourceSearch, sourceFilterActive, visibleSourceCount, visibleEnabledCount,
-    mappingSearch, mappingScope, onlyMultiField, planHeaders, planCommonKeys,
+    sourcePreview, sourcePreviewTitle, sourcePreviewVisible, sourcePreviewLoading,
+    collapsedGroups, sourceSearch, sourceFilterActive, visibleSourceCount, visibleEnabledCount,
+    mappingSearch, onlyMultiField, planHeaders,
     activePage, showAbout,
     // getters
-    busy, hasSources, enabledIndices, rowsMetric, sheetsMetric, databaseReady, canStart, fieldGroups, formatNumber,
+    busy, hasSources, rowsMetric, sheetsMetric, databaseReady, canStart, fieldGroups, formatNumber,
     // actions
     chooseFolder, chooseFiles, scanFolder, scanFiles, clearSources,
     toggleSourceEnabled, selectAll, toggleGroup, setGroupEnabled, removeGroup, removeSource,
     applyGroupHeader, reloadTable,
-    setMode, setAdvanced, moveOutputColumn, moveOutputColumnByName, selectedTable, setMapping, setMappingOperation,
-    resetMapping, applySuggestions,
-    setFieldTarget, setFieldEnabled, setFieldTransform, resetField, toggleCommonFields: () => (hideCommonMappings.value = !hideCommonMappings.value),
-    setMismatchOnly: (v: boolean) => (mismatchOnly.value = v),
-    showSourcePreview, showMergedPreview, runPreflight, startMerge, cancelMerge,
+    setMode, setAdvanced, moveOutputColumn, moveOutputColumnByName,
+    setFieldTarget, setFieldEnabled, setFieldTransform, setFieldAggregate, resetField,
+    showSourcePreview, closeSourcePreview, showMergedPreview, runPreflight, startMerge, cancelMerge,
     loadDatabaseProfiles, saveDatabaseProfile, deleteDatabaseProfile, testDatabaseConnection,
     newDatabaseProfile, openDatabaseTarget, openDatabaseConnections,
     saveScheme, openScheme, openSchemeByPath, checkUpdate, loadState, initEvents, revealOutput, openLog, refreshPlan,

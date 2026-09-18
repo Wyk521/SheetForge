@@ -1,21 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { headerKey, useMergeStore } from "../stores/merge";
+import { computed } from "vue";
+import { useMergeStore } from "../stores/merge";
 import FieldBatchView from "../components/FieldBatchView.vue";
 import type { MergeMode } from "../types";
 
 const store = useMergeStore();
-
-const TRANSFORMS = ["None", "Trim", "Uppercase", "Lowercase"];
-const AGGREGATES = ["First", "Sum", "UniqueJoin", "TextJoin"];
-
-function transformIndex(value: string): number {
-  return TRANSFORMS.indexOf(value);
-}
-function aggregateIndex(value: string): number {
-  return AGGREGATES.indexOf(value);
-}
 
 const modes: { value: MergeMode; label: string }[] = [
   { value: "Union", label: "列名并集" },
@@ -32,85 +21,14 @@ const mappingEnabled = computed(
     store.options.mode === "Join"
 );
 
-const enabledList = computed(() =>
-  store.sources
-    .map((table, index) => ({ index, table }))
-    .filter((item) => item.table.enabled)
-);
-
-const table = computed(() => store.selectedTable());
-
-const commonKeys = computed(() => store.planCommonKeys);
-
-const suggestions = ref<Record<string, string>>({});
-watch(
-  () => [store.sources, store.options.mode] as const,
-  async () => {
-    try {
-      suggestions.value = await invoke<Record<string, string>>("get_suggestions", {
-        tables: store.sources,
-      });
-    } catch {
-      suggestions.value = {};
-    }
-  },
-  { immediate: true }
-);
-
-const mappingRows = computed(() => {
-  const t = table.value;
-  if (!t) return [];
-  const search = store.mappingSearch.toLowerCase();
-  const outputPositions = new Map(
-    store.planHeaders.map((header, index) => [headerKey(header), index])
-  );
-  const outputPosition = (source: string, target: string) =>
-    outputPositions.get(headerKey(target)) ??
-    outputPositions.get(headerKey(source)) ??
-    Number.MAX_SAFE_INTEGER;
-  return t.mappings
-    .map((m, index) => ({ m, index, suggestion: suggestions.value[m.source_name] ?? "" }))
-    .filter((row) => {
-      const commonField = commonKeys.value.has(headerKey(row.m.source_name));
-      const differs =
-        headerKey(row.m.source_name) !== headerKey(row.m.target_name) ||
-        !!row.suggestion;
-      if (store.hideCommonMappings && commonField) return false;
-      if (store.mismatchOnly && !differs) return false;
-      if (
-        search &&
-        !row.m.source_name.toLowerCase().includes(search) &&
-        !row.m.target_name.toLowerCase().includes(search)
-      ) {
-        return false;
-      }
-      return true;
-    })
-    .sort(
-      (left, right) =>
-        outputPosition(left.m.source_name, left.m.target_name) -
-          outputPosition(right.m.source_name, right.m.target_name) ||
-        left.index - right.index
-    );
-});
-
 function onModeChange(mode: MergeMode) {
   store.setMode(mode);
-  store.selectedMappingTable = store.enabledIndices[0] ?? 0;
-}
-
-function updateTableSelection(index: number) {
-  store.selectedMappingTable = index;
-}
-
-function outputIndex(name: string): number {
-  return store.planHeaders.findIndex((header) => headerKey(header) === headerKey(name));
 }
 </script>
 
 <template>
   <div>
-    <h1 style="font-size: 18px; font-weight: 600; margin: 0 0 14px">设置合并规则</h1>
+    <h1 style="font-size: 18px; font-weight: 600; margin: 0 0 14px">合并工作区</h1>
 
     <el-radio-group :model-value="store.options.mode" size="large" style="margin-bottom: 14px" @change="onModeChange">
       <el-radio-button v-for="mode in modes" :key="mode.value" :value="mode.value">
@@ -200,7 +118,14 @@ function outputIndex(name: string): number {
       <!-- 右侧：字段映射与输出顺序 -->
       <div style="flex: 1; min-width: 0">
         <el-card shadow="never">
-          <template v-if="!mappingEnabled">
+          <template v-if="mappingEnabled">
+            <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px">字段映射与输出顺序</div>
+            <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 10px">
+              按来源字段集中编辑；展开字段即可直接预览来源表，预览不会离开当前工作区。
+            </div>
+            <FieldBatchView />
+          </template>
+          <template v-else>
             <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px">输出字段顺序</div>
             <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 10px">
               用上下按钮调整最终输出列顺序。
@@ -229,136 +154,13 @@ function outputIndex(name: string): number {
                 </el-button>
               </div>
             </div>
-          </template>
-          <template v-else>
-            <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px">字段映射与输出顺序</div>
-            <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 10px">
-              映射表按最终输出顺序排列；直接在字段行中用 ↑↓ 调整该列位置。
+            <div style="text-align: center; padding: 14px 20px 2px">
+              <div style="font-size: 13px; font-weight: 600; margin-bottom: 6px">当前模式不修改字段</div>
+              <div style="font-size: 12px; color: var(--sf-text-muted)">
+                并集 / 交集直接使用原始表头；需要改名、纠错或清洗字段时，请切换到「修正表头」模式。
+              </div>
             </div>
-          <el-radio-group v-model="store.mappingScope" size="small" style="margin-bottom: 10px">
-            <el-radio-button value="table">按表改字段</el-radio-button>
-            <el-radio-button value="field">按字段改表</el-radio-button>
-          </el-radio-group>
-          <template v-if="store.mappingScope === 'table'">
-          <div style="display: flex; gap: 8px; margin-bottom: 10px">
-            <el-select
-              :model-value="store.selectedMappingTable"
-              style="flex: 1"
-              @change="updateTableSelection"
-            >
-              <el-option
-                v-for="item in enabledList"
-                :key="item.index"
-                :label="store.displayName(item.table)"
-                :value="item.index"
-              />
-            </el-select>
-            <el-input
-              v-model="store.mappingSearch"
-              placeholder="搜索字段"
-              style="width: 170px"
-              clearable
-            />
-            <el-button @click="store.mismatchOnly = !store.mismatchOnly">
-              {{ store.mismatchOnly ? "显示全部" : "只看差异" }}
-            </el-button>
-            <el-button @click="store.applySuggestions()">应用建议</el-button>
-            <el-button @click="store.resetMapping()">恢复本表</el-button>
-          </div>
-          <div style="display: flex; align-items: center; margin-bottom: 8px">
-            <span style="flex: 1; font-size: 11px; color: var(--sf-text-muted)">字段映射与清洗</span>
-            <el-button size="small" text @click="store.toggleCommonFields()">
-              {{ store.hideCommonMappings ? "显示共有字段" : "隐藏共有字段" }}
-            </el-button>
-          </div>
-          <el-table :data="mappingRows" size="small" border>
-            <el-table-column label="启用" width="64">
-              <template #default="{ row }">
-                <el-switch
-                  :model-value="row.m.enabled"
-                  size="small"
-                  @change="(v: boolean | string | number) => store.setMapping(row.index, Boolean(v), row.m.target_name)"
-                />
-              </template>
-            </el-table-column>
-            <el-table-column label="源字段" min-width="140" show-overflow-tooltip>
-              <template #default="{ row }">
-                <div style="font-weight: 600">{{ row.m.source_name }}</div>
-                <div v-if="row.suggestion" style="color: var(--sf-primary); font-size: 10.5px">
-                  建议 → {{ row.suggestion }}
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column label="顺序" width="82" align="center">
-              <template #default="{ row }">
-                <el-button-group>
-                  <el-button
-                    size="small"
-                    text
-                    :disabled="outputIndex(row.m.target_name) <= 0"
-                    @click="store.moveOutputColumnByName(row.m.target_name, -1)"
-                  >
-                    ↑
-                  </el-button>
-                  <el-button
-                    size="small"
-                    text
-                    :disabled="outputIndex(row.m.target_name) < 0 || outputIndex(row.m.target_name) >= store.planHeaders.length - 1"
-                    @click="store.moveOutputColumnByName(row.m.target_name, 1)"
-                  >
-                    ↓
-                  </el-button>
-                </el-button-group>
-              </template>
-            </el-table-column>
-            <el-table-column label="目标字段" min-width="160">
-              <template #default="{ row }">
-                <el-input
-                  :model-value="row.m.target_name"
-                  size="small"
-                  :disabled="!row.m.enabled"
-                  @update:model-value="(v: string) => store.setMapping(row.index, row.m.enabled, v)"
-                />
-              </template>
-            </el-table-column>
-            <el-table-column label="清洗" width="120">
-              <template #default="{ row }">
-                <el-select
-                  :model-value="row.m.transform"
-                  size="small"
-                  @change="(v: string) => store.setMappingOperation(row.index, transformIndex(v), aggregateIndex(row.m.aggregate))"
-                >
-                  <el-option label="不处理" value="None" />
-                  <el-option label="去空格" value="Trim" />
-                  <el-option label="转大写" value="Uppercase" />
-                  <el-option label="转小写" value="Lowercase" />
-                </el-select>
-              </template>
-            </el-table-column>
-            <el-table-column v-if="store.options.mode === 'Consolidate'" label="汇总方式" width="130">
-              <template #default="{ row }">
-                <el-select
-                  :model-value="row.m.aggregate"
-                  size="small"
-                  @change="(v: string) => store.setMappingOperation(row.index, transformIndex(row.m.transform), aggregateIndex(v))"
-                >
-                  <el-option label="取首值" value="First" />
-                  <el-option label="求和" value="Sum" />
-                  <el-option label="唯一拼接" value="UniqueJoin" />
-                  <el-option label="文本拼接" value="TextJoin" />
-                </el-select>
-              </template>
-            </el-table-column>
-          </el-table>
           </template>
-          <FieldBatchView v-else />
-          </template>
-          <div v-if="!mappingEnabled" style="text-align: center; padding: 24px 20px 10px">
-            <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px">并集 / 交集模式不修改字段</div>
-            <div style="font-size: 12px; color: var(--sf-text-muted)">
-              输出字段直接取自各表的原始表头。需要改名、纠错或清洗字段时，请切换到「修正表头」模式。
-            </div>
-          </div>
         </el-card>
       </div>
     </div>

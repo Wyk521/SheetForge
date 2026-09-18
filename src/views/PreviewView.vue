@@ -4,21 +4,10 @@ import { ElMessage } from "element-plus";
 import { save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { useMergeStore } from "../stores/merge";
+import PreviewTableGrid from "../components/PreviewTableGrid.vue";
 
 const store = useMergeStore();
-const subTab = ref(0); // 0 源数据预览 / 1 结果预览 / 2 检查报告
-
-const rowsData = computed(() => {
-  const preview = store.preview;
-  if (!preview) return [];
-  return preview.rows.map((row, index) => {
-    const record: Record<string, string> = { __line: String(index + 1) };
-    row.forEach((cell, column) => {
-      record[String(column)] = cell;
-    });
-    return record;
-  });
-});
+const subTab = ref(0); // 0 合并结果预览 / 1 检查报告
 
 const errorCount = computed(() => store.checkIssues.filter((i) => i.level === "Error").length);
 const warnCount = computed(() => store.checkIssues.filter((i) => i.level === "Warning").length);
@@ -43,8 +32,8 @@ function levelLabel(level: string) {
 
 function onSubTabChange(index: number) {
   subTab.value = index;
-  if (index === 1) void store.showMergedPreview();
-  if (index === 2) void store.runPreflight(false);
+  if (index === 0) void store.showMergedPreview();
+  if (index === 1) void store.runPreflight(false);
 }
 
 async function exportReport() {
@@ -69,50 +58,14 @@ async function exportReport() {
 <template>
   <div>
     <div style="display: flex; align-items: center; margin-bottom: 12px">
-      <h1 style="font-size: 17px; font-weight: 600; margin: 0">预览与合并前检查</h1>
+      <h1 style="font-size: 17px; font-weight: 600; margin: 0">输出预览与检查</h1>
       <el-radio-group :model-value="subTab" style="margin-left: auto" @change="onSubTabChange">
-        <el-radio-button :value="0">源数据预览</el-radio-button>
-        <el-radio-button :value="1">结果预览</el-radio-button>
-        <el-radio-button :value="2">检查报告</el-radio-button>
+        <el-radio-button :value="0">结果预览</el-radio-button>
+        <el-radio-button :value="1">检查报告</el-radio-button>
       </el-radio-group>
     </div>
 
     <template v-if="subTab === 0">
-      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px">
-        <el-select
-          :model-value="store.selectedMappingTable"
-          style="flex: 1"
-          @change="(v: number) => store.showSourcePreview(v)"
-        >
-          <el-option
-            v-for="(index) in store.enabledIndices"
-            :key="index"
-            :label="store.displayName(store.sources[index])"
-            :value="index"
-          />
-        </el-select>
-        <el-button :disabled="!store.hasSources || store.busy" @click="store.showSourcePreview(store.selectedMappingTable)">
-          刷新预览
-        </el-button>
-      </div>
-      <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px">{{ store.previewTitle }}</div>
-      <el-table v-if="store.preview" :data="rowsData" size="small" border :max-height="440">
-        <el-table-column prop="__line" label="#" width="52" align="right" />
-        <el-table-column
-          v-for="(header, column) in store.preview.headers"
-          :key="column"
-          :prop="String(column)"
-          :label="header"
-          min-width="120"
-          show-overflow-tooltip
-        />
-      </el-table>
-      <div v-else style="color: var(--sf-text-muted); font-size: 12px; padding: 40px 0; text-align: center">
-        选择一个数据表生成预览
-      </div>
-    </template>
-
-    <template v-else-if="subTab === 1">
       <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px">
         <span style="font-size: 11px; color: var(--sf-text-muted)">
           按当前规则显示前 30 行；正式导出仍采用流式处理
@@ -132,19 +85,9 @@ async function exportReport() {
         <el-button style="margin-left: auto" @click="store.showMergedPreview()">刷新预览</el-button>
       </div>
       <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px">{{ store.previewTitle }}</div>
-      <el-table v-if="store.preview" :data="rowsData" size="small" border :max-height="440">
-        <el-table-column prop="__line" label="#" width="52" align="right" />
-        <el-table-column
-          v-for="(header, column) in store.preview.headers"
-          :key="column"
-          :prop="String(column)"
-          :label="header"
-          min-width="120"
-          show-overflow-tooltip
-        />
-      </el-table>
+      <PreviewTableGrid v-if="store.preview" :preview="store.preview" />
       <div v-else style="color: var(--sf-text-muted); font-size: 12px; padding: 40px 0; text-align: center">
-        点击「结果预览」生成合并结果预览
+        点击「刷新预览」生成合并结果预览
       </div>
     </template>
 

@@ -21,7 +21,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::get_plan,
-            commands::get_suggestions,
             commands::path_exists,
             commands::get_log_path,
             commands::get_database_profiles,

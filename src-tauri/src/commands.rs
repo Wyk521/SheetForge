@@ -66,11 +66,6 @@ pub fn get_plan(tables: Vec<SourceTable>, options: MergeOptions) -> PlanSnapshot
 }
 
 #[tauri::command]
-pub fn get_suggestions(tables: Vec<SourceTable>) -> std::collections::HashMap<String, String> {
-    crate::inspect::mapping_suggestions(&tables)
-}
-
-#[tauri::command]
 pub fn path_exists(path: String) -> bool {
     PathBuf::from(&path).exists()
 }

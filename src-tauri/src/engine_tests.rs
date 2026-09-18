@@ -562,7 +562,7 @@ fn batch_rename_same_field_across_tables() {
     let c = scan_csv(&dir, "c.csv", "姓名,金额,备注\n王五,300,ok\n");
     let d = scan_csv(&dir, "d.csv", "姓名\n赵六\n");
 
-    // 模拟「按字段改表」的批量动作：把所有表中“金额”这个来源字段全部映射到“合同金额”
+    // 模拟字段映射工作区的批量动作：把所有表中“金额”这个来源字段全部映射到“合同金额”
     // （不含该字段的表不受影响）
     let tables: Vec<SourceTable> = vec![a, b, c, d]
         .into_iter()

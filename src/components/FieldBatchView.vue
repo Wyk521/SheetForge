@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { headerKey, useMergeStore } from "../stores/merge";
-import type { TransformOp } from "../types";
+import type { AggregateOp, TransformOp } from "../types";
 
 const store = useMergeStore();
 
@@ -16,6 +16,13 @@ const TRANSFORMS: { value: TransformOp; label: string }[] = [
   { value: "Lowercase", label: "转小写" },
 ];
 
+const AGGREGATES: { value: AggregateOp; label: string }[] = [
+  { value: "First", label: "取首值" },
+  { value: "Sum", label: "求和" },
+  { value: "UniqueJoin", label: "唯一拼接" },
+  { value: "TextJoin", label: "文本拼接" },
+];
+
 const filteredGroups = computed(() => {
   const search = store.mappingSearch.trim().toLowerCase();
   return store.fieldGroups.filter((g) => {
@@ -23,7 +30,8 @@ const filteredGroups = computed(() => {
     if (
       search &&
       !g.key.toLowerCase().includes(search) &&
-      !(g.uniformTarget ?? "").toLowerCase().includes(search)
+      !(g.uniformTarget ?? "").toLowerCase().includes(search) &&
+      !g.tables.some((source) => source.name.toLowerCase().includes(search))
     ) {
       return false;
     }
@@ -38,7 +46,7 @@ const filteredGroups = computed(() => {
       <el-input v-model="store.mappingSearch" placeholder="搜索字段" style="width: 200px" clearable />
       <el-checkbox v-model="store.onlyMultiField">只看多表字段</el-checkbox>
       <span style="flex: 1; font-size: 11px; color: var(--sf-text-muted); text-align: right">
-        按来源表头分组，改动会同步到所有启用表中的同名字段
+        按来源字段分组，改动会同步到所有启用表；展开后可直接预览来源表
       </span>
     </div>
     <el-table v-if="filteredGroups.length > 0" :data="filteredGroups" size="small" border>
@@ -48,8 +56,22 @@ const filteredGroups = computed(() => {
             <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 4px">
               涉及 {{ row.count }} 张启用表：
             </div>
-            <div v-for="(name, i) in row.tables" :key="i" style="font-size: 12px; line-height: 1.8">
-              {{ name }}
+            <div
+              v-for="source in row.tables"
+              :key="source.index"
+              style="display: flex; align-items: center; gap: 8px; min-height: 30px"
+            >
+              <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                {{ source.name }}
+              </span>
+              <el-button
+                size="small"
+                text
+                :disabled="store.busy"
+                @click.stop="store.showSourcePreview(source.index)"
+              >
+                预览
+              </el-button>
             </div>
           </div>
         </template>
@@ -117,6 +139,18 @@ const filteredGroups = computed(() => {
             @change="(v: string | number | boolean | undefined) => store.setFieldTransform(row.key, String(v) as TransformOp)"
           >
             <el-option v-for="op in TRANSFORMS" :key="op.value" :label="op.label" :value="op.value" />
+          </el-select>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="store.options.mode === 'Consolidate'" label="汇总方式" width="130">
+        <template #default="{ row }">
+          <el-select
+            :model-value="row.uniformAggregate ?? ''"
+            size="small"
+            placeholder="多值"
+            @change="(v: string | number | boolean | undefined) => store.setFieldAggregate(row.key, String(v) as AggregateOp)"
+          >
+            <el-option v-for="op in AGGREGATES" :key="op.value" :label="op.label" :value="op.value" />
           </el-select>
         </template>
       </el-table-column>

@@ -8,6 +8,7 @@ import BottomBar from "./components/BottomBar.vue";
 import AboutDialog from "./components/AboutDialog.vue";
 import DatabaseDialog from "./components/DatabaseDialog.vue";
 import DatabaseConnectionsDialog from "./components/DatabaseConnectionsDialog.vue";
+import SourcePreviewDialog from "./components/SourcePreviewDialog.vue";
 import DataSourceView from "./views/DataSourceView.vue";
 import MergeRulesView from "./views/MergeRulesView.vue";
 import PreviewView from "./views/PreviewView.vue";
@@ -51,6 +52,7 @@ function onKeyDown(event: KeyboardEvent) {
     store.showAbout = false;
     store.showDatabaseDialog = false;
     store.showDatabaseConnectionsDialog = false;
+    store.closeSourcePreview();
   }
 }
 
@@ -105,5 +107,6 @@ onUnmounted(() => {
     <AboutDialog />
     <DatabaseDialog />
     <DatabaseConnectionsDialog />
+    <SourcePreviewDialog />
   </div>
 </template>

@@ -369,44 +369,6 @@ pub fn preflight_for_destination(
     issues
 }
 
-pub fn mapping_suggestions(tables: &[SourceTable]) -> HashMap<String, String> {
-    let mut frequency = HashMap::<String, (String, usize)>::new();
-    for table in tables.iter().filter(|table| table.enabled) {
-        for header in &table.headers {
-            let entry = frequency
-                .entry(header_key(header))
-                .or_insert((header.clone(), 0));
-            entry.1 += 1;
-        }
-    }
-    let candidates = frequency
-        .values()
-        .filter(|(_, count)| *count >= 2)
-        .map(|(name, _)| name)
-        .collect::<Vec<_>>();
-    let mut result = HashMap::new();
-    for table in tables.iter().filter(|table| table.enabled) {
-        for header in &table.headers {
-            if candidates
-                .iter()
-                .any(|candidate| header_key(candidate) == header_key(header))
-            {
-                continue;
-            }
-            if let Some(best) = candidates.iter().max_by(|a, b| {
-                strsim::normalized_levenshtein(&header_key(header), &header_key(a)).total_cmp(
-                    &strsim::normalized_levenshtein(&header_key(header), &header_key(b)),
-                )
-            }) {
-                if strsim::normalized_levenshtein(&header_key(header), &header_key(best)) >= 0.62 {
-                    result.insert(header.clone(), (*best).clone());
-                }
-            }
-        }
-    }
-    result
-}
-
 pub fn validate_csv(
     path: &std::path::Path,
     delimiter: u8,
