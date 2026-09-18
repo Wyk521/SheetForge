@@ -36,9 +36,9 @@ function onModeChange(mode: MergeMode) {
       </el-radio-button>
     </el-radio-group>
 
-    <div style="display: flex; gap: 14px; align-items: flex-start">
+    <div class="sf-merge-layout">
       <!-- 左侧：高级选项 -->
-      <div style="width: 330px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px">
+      <div class="sf-merge-advanced">
         <el-card shadow="never">
           <div style="display: flex; flex-direction: column; gap: 10px">
             <el-switch
@@ -116,7 +116,7 @@ function onModeChange(mode: MergeMode) {
       </div>
 
       <!-- 右侧：字段映射与输出顺序 -->
-      <div style="flex: 1; min-width: 0">
+      <div class="sf-merge-mapping">
         <el-card shadow="never">
           <template v-if="mappingEnabled">
             <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px">字段映射与输出顺序</div>
@@ -166,3 +166,37 @@ function onModeChange(mode: MergeMode) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.sf-merge-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.sf-merge-advanced {
+  display: flex;
+  flex: 0 1 280px;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 250px;
+}
+
+.sf-merge-mapping {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+@media (max-width: 1080px) {
+  .sf-merge-layout {
+    flex-direction: column;
+  }
+
+  .sf-merge-advanced,
+  .sf-merge-mapping {
+    width: 100%;
+    min-width: 0;
+  }
+}
+</style>

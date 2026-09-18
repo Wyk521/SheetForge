@@ -42,40 +42,43 @@ const filteredGroups = computed(() => {
 
 <template>
   <div>
-    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px">
-      <el-input v-model="store.mappingSearch" placeholder="搜索字段" style="width: 200px" clearable />
+    <div class="sf-field-batch-toolbar">
+      <el-input v-model="store.mappingSearch" class="sf-field-batch-search" placeholder="搜索字段" clearable />
       <el-checkbox v-model="store.onlyMultiField">只看多表字段</el-checkbox>
-      <span style="flex: 1; font-size: 11px; color: var(--sf-text-muted); text-align: right">
+      <span class="sf-field-batch-hint">
         按来源字段分组，改动会同步到所有启用表；展开后点击“预览源表”即可在当前工作区查看
       </span>
     </div>
-    <el-table v-if="filteredGroups.length > 0" :data="filteredGroups" size="small" border>
+    <div v-if="filteredGroups.length > 0" class="sf-field-table-wrap">
+      <el-table class="sf-field-table" :data="filteredGroups" size="small" border>
       <el-table-column type="expand">
         <template #default="{ row }">
-          <div style="padding: 6px 24px">
-            <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 4px">
+          <div class="sf-source-preview-list">
+            <div class="sf-source-preview-count">
               涉及 {{ row.count }} 张启用表：
             </div>
             <div
               v-for="source in row.tables"
               :key="source.index"
-              style="display: flex; align-items: center; gap: 8px; min-height: 30px"
+              class="sf-source-preview-row"
             >
               <span
-                style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer"
+                class="sf-source-preview-name"
                 title="点击预览此来源表"
                 @click.stop="store.showSourcePreview(source.index)"
               >
                 {{ source.name }}
               </span>
               <el-button
+                class="sf-source-preview-action"
                 size="small"
                 type="primary"
                 plain
                 :disabled="store.busy"
+                title="预览源表"
                 @click.stop="store.showSourcePreview(source.index)"
               >
-                预览源表
+                预览
               </el-button>
             </div>
           </div>
@@ -164,9 +167,83 @@ const filteredGroups = computed(() => {
           <el-button size="small" text type="danger" @click="store.resetField(row.key)">恢复</el-button>
         </template>
       </el-table-column>
-    </el-table>
+      </el-table>
+    </div>
     <div v-else style="padding: 30px 0; text-align: center; color: var(--sf-text-muted); font-size: 12px">
       {{ store.fieldGroups.length === 0 ? "暂无启用表字段" : "没有匹配的字段" }}
     </div>
   </div>
 </template>
+
+<style scoped>
+.sf-field-batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.sf-field-batch-search {
+  flex: 0 0 200px;
+}
+
+.sf-field-batch-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--sf-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.sf-field-table-wrap {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.sf-source-preview-list {
+  min-width: 0;
+  padding: 6px 24px;
+}
+
+.sf-source-preview-count {
+  margin-bottom: 4px;
+  color: var(--sf-text-muted);
+  font-size: 11px;
+}
+
+.sf-source-preview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  min-width: 0;
+}
+
+.sf-source-preview-name {
+  min-width: 0;
+  overflow: hidden;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-source-preview-action {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 1080px) {
+  .sf-field-batch-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .sf-field-batch-hint {
+    flex-basis: 100%;
+    text-align: left;
+  }
+}
+</style>

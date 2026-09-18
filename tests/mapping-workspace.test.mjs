@@ -65,6 +65,21 @@ test("输出预览按来源表分组，并为每个来源单独抽样", async ()
   assert.match(grid, /label="来源表名"/);
   assert.match(grid, /label="来源 Sheet"/);
   assert.match(grid, /sf-merged-preview-group/);
+  assert.doesNotMatch(grid, /sf-merged-preview-heading/);
+});
+
+test("默认窗口宽度下映射区保持可见并为源表操作保留空间", async () => {
+  const [rules, fieldBatch] = await Promise.all([
+    read("src/views/MergeRulesView.vue"),
+    read("src/components/FieldBatchView.vue"),
+  ]);
+
+  assert.match(rules, /sf-merge-layout/);
+  assert.match(rules, /sf-merge-advanced/);
+  assert.match(rules, /max-width: 1080px/);
+  assert.match(fieldBatch, /sf-field-table-wrap/);
+  assert.match(fieldBatch, /sf-source-preview-action/);
+  assert.match(fieldBatch, /title="预览源表"/);
 });
 
 test("导航和输出预览不再使用第一二三步文案", async () => {

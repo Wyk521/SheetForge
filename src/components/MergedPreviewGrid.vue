@@ -35,17 +35,6 @@ function rowsData(group: MergedPreviewGroup) {
       class="sf-merged-preview-group"
       :class="{ alternate: groupIndex % 2 === 1 }"
     >
-      <div class="sf-merged-preview-heading">
-        <div class="sf-merged-preview-source">
-          <span class="sf-merged-preview-label">来源表名</span>
-          <span class="sf-merged-preview-file" :title="group.source_file">{{ group.source_file }}</span>
-          <span class="sf-merged-preview-label">来源 Sheet</span>
-          <span class="sf-merged-preview-sheet" :title="group.source_sheet">{{ group.source_sheet }}</span>
-        </div>
-        <el-tag size="small" effect="plain" :type="group.rows.length > 0 ? 'info' : 'warning'">
-          {{ group.rows.length > 0 ? `前 ${group.rows.length} 行` : "没有数据行" }}
-        </el-tag>
-      </div>
       <el-table
         v-if="group.rows.length > 0"
         :data="rowsData(group)"
@@ -88,47 +77,6 @@ function rowsData(group: MergedPreviewGroup) {
 
 .sf-merged-preview-group.alternate {
   border-left-color: #67c23a;
-}
-
-.sf-merged-preview-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 42px;
-  padding: 7px 12px;
-  background: #f7f8fc;
-  border-bottom: 1px solid var(--sf-border-soft);
-}
-
-.sf-merged-preview-source {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  flex: 1;
-}
-
-.sf-merged-preview-label {
-  flex-shrink: 0;
-  color: var(--sf-text-muted);
-  font-size: 11px;
-}
-
-.sf-merged-preview-file,
-.sf-merged-preview-sheet {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.sf-merged-preview-file {
-  max-width: 38%;
-}
-
-.sf-merged-preview-sheet {
-  max-width: 24%;
 }
 
 .sf-merged-preview-no-rows,
