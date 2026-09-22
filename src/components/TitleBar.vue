@@ -33,8 +33,18 @@ onUnmounted(() => {
 
 <template>
   <div class="sf-titlebar">
-    <div class="sf-titlebar-drag" data-tauri-drag-region>
-      <span class="sf-titlebar-title" data-tauri-drag-region>表格合并</span>
+    <div
+      class="sf-titlebar-drag"
+      data-tauri-drag-region
+      :aria-label="isMax ? '应用标题栏，窗口已最大化' : '应用标题栏'"
+    >
+      <span class="sf-titlebar-brand" data-tauri-drag-region>SheetForge</span>
+      <span class="sf-titlebar-separator" data-tauri-drag-region aria-hidden="true">/</span>
+      <span class="sf-titlebar-title" data-tauri-drag-region>桌面数据合并工作台</span>
+      <span class="sf-titlebar-mark" data-tauri-drag-region>
+        <span aria-hidden="true"></span>
+        本地应用
+      </span>
     </div>
     <div class="sf-titlebar-controls">
       <button
@@ -83,7 +93,7 @@ onUnmounted(() => {
   height: 36px;
   display: flex;
   align-items: stretch;
-  background: var(--sf-bg-card);
+  background: var(--color-canvas);
   border-bottom: 1px solid var(--sf-border);
   user-select: none;
 }
@@ -92,15 +102,45 @@ onUnmounted(() => {
   flex: 1;
   display: flex;
   align-items: center;
-  padding-left: 14px;
+  gap: var(--space-xs);
+  padding-inline-start: var(--space-md);
   cursor: default;
 }
 
+.sf-titlebar-brand,
 .sf-titlebar-title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: 700;
   color: var(--sf-text-secondary);
-  letter-spacing: 0.3px;
+  letter-spacing: 0.04em;
+}
+
+.sf-titlebar-brand {
+  font-family: var(--font-display);
+  color: var(--color-ink);
+  letter-spacing: -0.01em;
+}
+
+.sf-titlebar-separator {
+  color: var(--color-rule-strong);
+}
+
+.sf-titlebar-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin-inline-start: var(--space-xs);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.08em;
+}
+
+.sf-titlebar-mark > span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-round);
+  background: var(--color-accent);
 }
 
 .sf-titlebar-controls {
@@ -113,22 +153,36 @@ onUnmounted(() => {
   height: 100%;
   border: none;
   background: transparent;
-  color: var(--sf-text-secondary);
+  color: var(--color-ink-2);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   padding: 0;
-  transition: background 0.12s, color 0.12s;
+  transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out);
 }
 
-.sf-win-btn:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--sf-text);
+.sf-win-btn:active {
+  transform: translateY(1px);
 }
 
-.sf-win-close:hover {
-  background: #e81123;
-  color: #fff;
+@media (hover: hover) and (pointer: fine) {
+  .sf-win-btn:hover {
+    background: var(--color-paper-2);
+    color: var(--color-ink);
+  }
+
+  .sf-win-close:hover {
+    background: var(--color-accent);
+    color: var(--color-accent-ink);
+  }
+}
+
+@media (max-width: 48rem) {
+  .sf-titlebar-separator,
+  .sf-titlebar-title,
+  .sf-titlebar-mark {
+    display: none;
+  }
 }
 </style>

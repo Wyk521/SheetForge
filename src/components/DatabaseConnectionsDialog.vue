@@ -128,7 +128,7 @@ function finishManagement() {
   <el-dialog
     v-model="store.showDatabaseConnectionsDialog"
     title="数据库连接"
-    width="860px"
+    width="min(860px, 92vw)"
     top="7vh"
     destroy-on-close
     :close-on-click-modal="false"
@@ -150,7 +150,7 @@ function finishManagement() {
           </small>
         </button>
         <el-empty v-if="profileNames.length === 0" description="还没有连接" :image-size="54" />
-        <el-button style="width: 100%; margin-top: 8px" @click="beginNew">＋ 新建连接</el-button>
+        <el-button class="db-new-button" @click="beginNew">＋ 新建连接</el-button>
         <div class="db-config-path">配置文件<br />{{ store.databaseConfigPath }}</div>
       </aside>
 
@@ -170,7 +170,7 @@ function finishManagement() {
             <el-input v-model="profile.host" placeholder="localhost" />
           </el-form-item>
           <el-form-item label="端口">
-            <el-input-number v-model="profile.port" :min="1" :max="65535" controls-position="right" style="width: 100%" />
+            <el-input-number v-model="profile.port" :min="1" :max="65535" controls-position="right" class="db-full-control" />
           </el-form-item>
           <el-form-item label="数据库">
             <el-input v-model="profile.database" placeholder="postgres" />
@@ -179,7 +179,7 @@ function finishManagement() {
             <el-input v-model="profile.user" placeholder="postgres" />
           </el-form-item>
           <el-form-item label="SSL 模式">
-            <el-select v-model="profile.sslmode" style="width: 100%">
+            <el-select v-model="profile.sslmode" class="db-full-control">
               <el-option label="prefer（优先 SSL）" value="prefer" />
               <el-option label="require（必须 SSL）" value="require" />
               <el-option label="verify-ca" value="verify-ca" />
@@ -209,25 +209,40 @@ function finishManagement() {
 </template>
 
 <style scoped>
-:deep(.el-dialog__body) { max-height: calc(86vh - 125px); overflow-y: auto; }
-.db-dialog-grid { display: grid; grid-template-columns: 205px 1fr; gap: 20px; min-height: 355px; }
-.db-profile-list { border-right: 1px solid var(--sf-border); padding-right: 16px; }
-.db-section-title { font-size: 12px; font-weight: 700; margin-bottom: 8px; }
-.db-profile-item { width: 100%; border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 9px 10px; text-align: left; cursor: pointer; color: var(--sf-text); margin-bottom: 4px; }
-.db-profile-item:hover { background: var(--el-color-primary-light-9); }
+:deep(.el-dialog__body) { max-height: calc(86vh - 8rem); overflow-y: auto; }
+.db-dialog-grid { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: var(--space-lg); min-height: 22rem; }
+.db-profile-list { border-right: var(--rule-hair) solid var(--sf-border); padding-right: var(--space-md); }
+.db-section-title { margin-bottom: var(--space-xs); font-size: var(--text-xs); font-weight: 700; }
+.db-profile-item { width: 100%; margin-bottom: var(--space-2xs); padding: var(--space-xs) var(--space-sm); border: var(--rule-hair) solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--sf-text); cursor: pointer; text-align: left; }
 .db-profile-item.active { border-color: var(--el-color-primary-light-5); background: var(--el-color-primary-light-9); }
+.db-profile-item:active { transform: translateY(1px); }
 .db-profile-item strong, .db-profile-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-profile-item small { color: var(--sf-text-muted); margin-top: 3px; }
-.db-config-path { margin-top: 14px; font-size: 10px; line-height: 1.45; color: var(--sf-text-muted); word-break: break-all; }
+.db-profile-item small { margin-top: var(--space-3xs); color: var(--sf-text-muted); }
+.db-new-button { width: 100%; margin-top: var(--space-xs); }
+.db-config-path { margin-top: var(--space-md); color: var(--sf-text-muted); font-size: var(--text-2xs); line-height: 1.45; word-break: break-all; }
 .db-form-area { min-width: 0; }
-.db-section-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.db-section-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-sm); }
 .db-section-heading b, .db-section-heading span { display: block; }
-.db-section-heading b { font-size: 14px; }
-.db-section-heading span { font-size: 11px; color: var(--sf-text-muted); margin-top: 3px; }
-.db-form { display: grid; grid-template-columns: 1.25fr 0.8fr 1fr; gap: 0 12px; }
+.db-section-heading b { font-size: var(--text-base); }
+.db-section-heading span { margin-top: var(--space-3xs); color: var(--sf-text-muted); font-size: var(--text-2xs); }
+.db-form { display: grid; grid-template-columns: 1.25fr 0.8fr 1fr; gap: 0 var(--space-sm); }
 .db-password-field { grid-column: span 2; }
 .db-password-field :deep(.el-form-item__content) { display: block; }
-.db-password-field .el-checkbox { margin-top: 4px; }
-.db-actions { display: flex; align-items: center; gap: 8px; }
-.db-test-ok { color: #1d8a4d; font-size: 11px; }
+.db-password-field .el-checkbox { margin-top: var(--space-2xs); }
+.db-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
+.db-full-control { width: 100%; }
+.db-test-ok { color: var(--color-success); font-size: var(--text-2xs); }
+
+@media (hover: hover) and (pointer: fine) {
+  .db-profile-item:hover { background: var(--el-color-primary-light-9); }
+}
+
+@media (max-width: 48rem) {
+  .db-dialog-grid,
+  .db-form { grid-template-columns: minmax(0, 1fr); }
+  .db-profile-list { padding-right: 0; padding-bottom: var(--space-md); border-right: 0; border-bottom: var(--rule-hair) solid var(--sf-border); }
+  .db-password-field { grid-column: auto; }
+  .db-section-heading { flex-direction: column; gap: var(--space-xs); }
+  .db-test-ok { flex: 1 1 100%; }
+}
 </style>

@@ -57,7 +57,7 @@ test("输出预览按来源表分组，并为每个来源单独抽样", async ()
   assert.match(types, /source_sheet: string/);
   assert.match(store, /preview_merged[\s\S]*limit: 5/);
   assert.match(inspect, /struct MergedPreviewGroup/);
-  assert.match(inspect, /for \(source_index, table in tables\.iter\(\)\.enumerate\(\)\.filter/);
+  assert.match(inspect, /for \(source_index, table\) in tables\.iter\(\)\.enumerate\(\)\.filter/);
   assert.match(inspect, /source_file:/);
   assert.match(commands, /Result<MergedPreview, String>/);
   assert.match(preview, /MergedPreviewGrid/);

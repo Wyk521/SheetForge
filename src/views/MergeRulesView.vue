@@ -27,10 +27,16 @@ function onModeChange(mode: MergeMode) {
 </script>
 
 <template>
-  <div>
-    <h1 style="font-size: 18px; font-weight: 600; margin: 0 0 14px">合并工作区</h1>
+  <div class="sf-page sf-page-rules">
+    <div class="sf-page-head sf-rules-head">
+      <div class="sf-page-heading-copy">
+        <p class="sf-page-code"><span>02</span> 规则与字段</p>
+        <h1 class="sf-page-title">合并工作区</h1>
+        <p class="sf-page-description">选择合并方式，再核对输出字段、键字段与筛选条件。</p>
+      </div>
+    </div>
 
-    <el-radio-group :model-value="store.options.mode" size="large" style="margin-bottom: 14px" @change="onModeChange">
+    <el-radio-group class="sf-mode-strip" :model-value="store.options.mode" size="large" @change="onModeChange">
       <el-radio-button v-for="mode in modes" :key="mode.value" :value="mode.value">
         {{ mode.label }}
       </el-radio-button>
@@ -40,7 +46,7 @@ function onModeChange(mode: MergeMode) {
       <!-- 左侧：高级选项 -->
       <div class="sf-merge-advanced">
         <el-card shadow="never">
-          <div style="display: flex; flex-direction: column; gap: 10px">
+          <div class="sf-option-stack">
             <el-switch
               :model-value="store.options.include_source_file"
               inline-prompt
@@ -48,7 +54,7 @@ function onModeChange(mode: MergeMode) {
               inactive-text="记录来源文件"
               @change="(v: boolean | string | number) => store.setAdvanced({ include_source_file: Boolean(v) })"
             />
-            <div style="font-size: 10.5px; color: var(--sf-text-muted); margin-top: -6px">输出中增加文件名列</div>
+            <div class="sf-option-note">输出中增加文件名列</div>
             <el-switch
               :model-value="store.options.include_source_sheet"
               inline-prompt
@@ -56,7 +62,7 @@ function onModeChange(mode: MergeMode) {
               inactive-text="记录来源工作表"
               @change="(v: boolean | string | number) => store.setAdvanced({ include_source_sheet: Boolean(v) })"
             />
-            <div style="font-size: 10.5px; color: var(--sf-text-muted); margin-top: -6px">输出中增加 Sheet 名列</div>
+            <div class="sf-option-note">输出中增加 Sheet 名列</div>
             <el-switch
               :model-value="store.options.deduplicate"
               inline-prompt
@@ -64,21 +70,21 @@ function onModeChange(mode: MergeMode) {
               inactive-text="删除重复行"
               @change="(v: boolean | string | number) => store.setAdvanced({ deduplicate: Boolean(v) })"
             />
-            <div style="font-size: 10.5px; color: var(--sf-text-muted); margin-top: -6px">
+            <div class="sf-option-note">
               有键字段时按键，否则按整行
             </div>
           </div>
         </el-card>
 
         <el-card shadow="never">
-          <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px">键字段（多个用英文逗号分隔）</div>
+          <div class="sf-card-heading">键字段（多个用英文逗号分隔）</div>
           <el-input
             :model-value="store.options.key_columns.join(', ')"
             placeholder="例如：订单号, 日期"
             @update:model-value="(v: string) => store.setAdvanced({ key_columns: v.split(/[,，]/).map((s) => s.trim()).filter(Boolean) })"
           />
           <template v-if="store.options.mode === 'Join'">
-            <div style="font-size: 12px; font-weight: 600; margin: 12px 0 8px">关联方式</div>
+            <div class="sf-card-heading sf-card-heading-spaced">关联方式</div>
             <el-radio-group
               :model-value="store.options.join_kind"
               @change="(v: string | number | boolean | undefined) => store.setAdvanced({ join_kind: String(v) as never })"
@@ -91,12 +97,12 @@ function onModeChange(mode: MergeMode) {
         </el-card>
 
         <el-card shadow="never">
-          <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px">筛选（字段包含文本）</div>
-          <div style="display: flex; gap: 8px; margin-bottom: 8px">
+          <div class="sf-card-heading">筛选（字段包含文本）</div>
+          <div class="sf-filter-row">
             <el-input
               :model-value="store.options.filter_column"
               placeholder="字段名"
-              style="width: 110px"
+              class="sf-filter-column"
               @update:model-value="(v: string) => store.setAdvanced({ filter_column: v })"
             />
             <el-input
@@ -119,34 +125,40 @@ function onModeChange(mode: MergeMode) {
       <div class="sf-merge-mapping">
         <el-card shadow="never">
           <template v-if="mappingEnabled">
-            <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px">字段映射与输出顺序</div>
-            <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 10px">
+            <div class="sf-card-heading">字段映射与输出顺序</div>
+            <div class="sf-card-description">
               按来源字段集中编辑；展开字段后点击“预览源表”即可在当前工作区查看源表样本。
             </div>
             <FieldBatchView />
           </template>
           <template v-else>
-            <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px">输出字段顺序</div>
-            <div style="font-size: 11px; color: var(--sf-text-muted); margin-bottom: 10px">
+            <div class="sf-card-heading">输出字段顺序</div>
+            <div class="sf-card-description">
               用上下按钮调整最终输出列顺序。
             </div>
-            <div v-if="store.planHeaders.length === 0" style="color: var(--sf-text-muted); font-size: 11px">
+            <div v-if="store.planHeaders.length === 0" class="sf-inline-empty">
               暂无输出字段
             </div>
-            <div v-else style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px">
+            <div v-else class="sf-output-order">
               <div
                 v-for="(header, index) in store.planHeaders"
                 :key="header"
-                style="display: flex; align-items: center; gap: 8px; background: #f5f7fa; border-radius: 4px; padding: 6px 10px"
+                class="sf-output-order-row"
               >
-                <span style="flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                <span class="sf-output-order-name">
                   {{ header }}
                 </span>
-                <el-button size="small" :disabled="index === 0" @click="store.moveOutputColumn(index, -1)">
+                <el-button
+                  size="small"
+                  :aria-label="`上移输出字段：${header}`"
+                  :disabled="index === 0"
+                  @click="store.moveOutputColumn(index, -1)"
+                >
                   ↑
                 </el-button>
                 <el-button
                   size="small"
+                  :aria-label="`下移输出字段：${header}`"
                   :disabled="index === store.planHeaders.length - 1"
                   @click="store.moveOutputColumn(index, 1)"
                 >
@@ -154,9 +166,9 @@ function onModeChange(mode: MergeMode) {
                 </el-button>
               </div>
             </div>
-            <div style="text-align: center; padding: 14px 20px 2px">
-              <div style="font-size: 13px; font-weight: 600; margin-bottom: 6px">当前模式不修改字段</div>
-              <div style="font-size: 12px; color: var(--sf-text-muted)">
+            <div class="sf-mode-note">
+              <div class="sf-mode-note-title">当前模式不修改字段</div>
+              <div class="sf-mode-note-copy">
                 并集 / 交集直接使用原始表头；需要改名、纠错或清洗字段时，请切换到「修正表头」模式。
               </div>
             </div>
@@ -171,7 +183,7 @@ function onModeChange(mode: MergeMode) {
 .sf-merge-layout {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
+  gap: var(--space-md);
   min-width: 0;
 }
 
@@ -179,8 +191,99 @@ function onModeChange(mode: MergeMode) {
   display: flex;
   flex: 0 1 280px;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-sm);
   min-width: 250px;
+}
+
+.sf-mode-strip {
+  margin-bottom: var(--space-md);
+}
+
+.sf-option-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.sf-option-note {
+  margin-top: calc(var(--space-xs) * -1);
+  color: var(--sf-text-muted);
+  font-size: var(--text-2xs);
+}
+
+.sf-card-heading {
+  margin-bottom: var(--space-xs);
+  font-weight: 700;
+  font-size: var(--text-sm);
+}
+
+.sf-card-heading-spaced {
+  margin-top: var(--space-sm);
+}
+
+.sf-card-description {
+  margin-bottom: var(--space-sm);
+  color: var(--sf-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.sf-filter-row {
+  display: flex;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-xs);
+}
+
+.sf-filter-column {
+  width: 7rem;
+}
+
+.sf-inline-empty {
+  color: var(--sf-text-muted);
+  font-size: var(--text-xs);
+}
+
+.sf-output-order {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+
+.sf-output-order-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border: var(--rule-hair) solid var(--color-rule-2);
+  border-radius: var(--radius-control);
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+}
+
+.sf-output-order-name {
+  flex: 1;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-mode-note {
+  padding: var(--space-md) var(--space-lg) var(--space-2xs);
+  text-align: center;
+}
+
+.sf-mode-note-title {
+  margin-bottom: var(--space-xs);
+  font-weight: 700;
+  font-size: var(--text-sm);
+}
+
+.sf-mode-note-copy {
+  color: var(--sf-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
 }
 
 .sf-merge-mapping {

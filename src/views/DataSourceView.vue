@@ -55,15 +55,16 @@ async function previewSource(index: number) {
 </script>
 
 <template>
-  <div>
-    <div style="display: flex; align-items: flex-end; gap: 12px; margin-bottom: 14px">
-      <div>
-        <h1 style="font-size: 18px; font-weight: 600; margin: 0">选择数据源</h1>
-        <p style="font-size: 11.5px; color: var(--sf-text-muted); margin: 4px 0 0">
+  <div class="sf-page sf-page-source">
+    <div class="sf-page-head sf-source-head">
+      <div class="sf-page-heading-copy">
+        <p class="sf-page-code"><span>01</span> 装载与校准</p>
+        <h1 class="sf-page-title">选择数据源</h1>
+        <p class="sf-page-description">
           「开始行」是表头从第几行开始；只有多行表头才需要调整「占用行数」
         </p>
       </div>
-      <div style="margin-left: auto; display: flex; gap: 8px; align-items: center">
+      <div class="sf-page-actions">
         <el-button type="primary" :disabled="store.busy" @click="store.chooseFolder()">
           选择文件夹
         </el-button>
@@ -71,7 +72,7 @@ async function previewSource(index: number) {
         <el-select
           v-model="recentFolder"
           placeholder="最近文件夹…"
-          style="width: 150px"
+          class="sf-recent-select"
           clearable
           @change="onRecentFolder"
         >
@@ -80,7 +81,7 @@ async function previewSource(index: number) {
         <el-select
           v-model="recentScheme"
           placeholder="最近方案…"
-          style="width: 150px"
+          class="sf-recent-select"
           clearable
           @change="onRecentScheme"
         >
@@ -89,14 +90,14 @@ async function previewSource(index: number) {
       </div>
     </div>
 
-    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 12px">
+    <div class="sf-workbench-toolbar">
       <el-input
         v-model="store.sourceSearch"
         placeholder="搜索文件名、Sheet 或路径"
         clearable
-        style="flex: 1; min-width: 180px"
+        class="sf-source-search"
       />
-      <span style="color: var(--sf-text-muted); font-size: 11px; white-space: nowrap">
+      <span class="sf-toolbar-summary">
         <template v-if="store.sourceFilterActive">
           当前匹配 {{ store.visibleSourceCount }} 张 · 已选 {{ store.visibleEnabledCount }} 张
         </template>
@@ -119,13 +120,15 @@ async function previewSource(index: number) {
       </el-button>
     </div>
 
-    <el-card shadow="never" style="border-radius: 4px">
+    <el-card class="sf-source-sheet" shadow="never">
       <template v-if="!store.hasSources">
-        <div style="padding: 60px 0; text-align: center; color: var(--sf-text-muted)">
-          <div style="font-size: 15px; font-weight: 600; color: var(--sf-text); margin-bottom: 6px">
+        <div class="sf-empty-ticket">
+          <span class="sf-empty-mark" aria-hidden="true"></span>
+          <div class="sf-empty-title">
             把 Excel / CSV 拖到这里
           </div>
-          <div style="font-size: 12px">也可以选择文件夹，软件会递归查找所有支持的工作簿</div>
+          <div class="sf-empty-copy">也可以选择文件夹，软件会递归查找所有支持的工作簿</div>
+          <el-button type="primary" :disabled="store.busy" @click="store.chooseFiles()">选择多个文件</el-button>
         </div>
       </template>
       <template v-else>
@@ -136,18 +139,20 @@ async function previewSource(index: number) {
               :disabled="store.busy"
               @change="(value: boolean | string | number) => store.setGroupEnabled(group.path, Boolean(value), store.sourceFilterActive)"
             />
-            <span
-              style="cursor: pointer; color: var(--sf-primary); font-size: 14px; width: 14px; text-align: center"
+            <button
+              type="button"
+              class="sf-group-toggle"
+              :aria-label="group.collapsed ? '展开工作簿' : '收起工作簿'"
               @click="store.toggleGroup(group.path)"
             >
               {{ group.collapsed ? "›" : "⌄" }}
-            </span>
+            </button>
             <span class="sf-row-name">{{ group.fileName }}</span>
             <span class="sf-row-meta">
               {{ store.sourceFilterActive ? "匹配 " : "" }}{{ group.tables.length }} 个数据表 · 已选
               {{ group.tables.filter((item) => item.table.enabled).length }} 个
             </span>
-            <div style="margin-left: auto; display: flex; gap: 8px">
+            <div class="sf-row-actions">
               <el-button size="small" :disabled="store.busy" @click="store.applyGroupHeader(group.path)">
                 统一表头
               </el-button>
@@ -165,8 +170,8 @@ async function previewSource(index: number) {
               :disabled="store.busy"
               @change="(value: boolean | string | number) => store.toggleSourceEnabled(item.index, Boolean(value))"
             />
-            <div style="flex: 1; min-width: 0">
-              <div class="sf-row-name" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+            <div class="sf-sheet-copy">
+              <div class="sf-row-name sf-row-name-truncate">
                 {{ item.table.sheet_name }}
               </div>
               <div class="sf-row-meta">
@@ -174,23 +179,23 @@ async function previewSource(index: number) {
                 列 · 推荐表头第 {{ item.table.suggested_header_row }}
               </div>
             </div>
-            <span style="color: var(--sf-text-muted); font-size: 11px">开始行</span>
+            <span class="sf-field-label">开始行</span>
             <el-input-number
               :model-value="item.table.header_row"
               :min="1"
               :max="100000"
               size="small"
-              style="width: 100px"
+              class="sf-header-row-input"
               :disabled="store.busy"
               @change="(value: number | undefined) => store.reloadTable(item.index, value ?? 1, item.table.header_rows)"
             />
-            <span style="color: var(--sf-text-muted); font-size: 11px">占用行数</span>
+            <span class="sf-field-label">占用行数</span>
             <el-input-number
               :model-value="item.table.header_rows"
               :min="1"
               :max="3"
               size="small"
-              style="width: 80px"
+              class="sf-header-rows-input"
               :disabled="store.busy"
               @change="(value: number | undefined) => store.reloadTable(item.index, item.table.header_row, value ?? 1)"
             />
@@ -204,6 +209,72 @@ async function previewSource(index: number) {
         </div>
       </template>
     </el-card>
-    <div style="font-size: 10px; color: var(--sf-text-muted); margin-top: 8px">{{ store.inputLabel }}</div>
+    <div class="sf-source-path">{{ store.inputLabel }}</div>
   </div>
 </template>
+
+<style scoped>
+.sf-source-head {
+  align-items: end;
+}
+
+.sf-source-search {
+  flex: 1;
+  min-width: 180px;
+}
+
+.sf-recent-select {
+  width: 9.375rem;
+}
+
+.sf-sheet-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.sf-group-row > .sf-row-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-header-row-input {
+  width: 6.25rem;
+}
+
+.sf-header-rows-input {
+  width: 5rem;
+}
+
+.sf-row-name-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-inline-start: auto;
+}
+
+.sf-field-label {
+  color: var(--sf-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+
+.sf-source-path {
+  margin-top: var(--space-xs);
+  overflow: hidden;
+  color: var(--sf-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

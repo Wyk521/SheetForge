@@ -4,6 +4,8 @@ import ElementPlus from "element-plus";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import "element-plus/dist/index.css";
 import "./styles.css";
+import "../tokens.css";
+import "./hallmark.css";
 import App from "./App.vue";
 
 createApp(App).use(createPinia()).use(ElementPlus, { locale: zhCn }).mount("#app");

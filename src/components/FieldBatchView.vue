@@ -41,7 +41,7 @@ const filteredGroups = computed(() => {
 </script>
 
 <template>
-  <div>
+  <div class="sf-field-batch">
     <div class="sf-field-batch-toolbar">
       <el-input v-model="store.mappingSearch" class="sf-field-batch-search" placeholder="搜索字段" clearable />
       <el-checkbox v-model="store.onlyMultiField">只看多表字段</el-checkbox>
@@ -62,11 +62,7 @@ const filteredGroups = computed(() => {
               :key="source.index"
               class="sf-source-preview-row"
             >
-              <span
-                class="sf-source-preview-name"
-                title="点击预览此来源表"
-                @click.stop="store.showSourcePreview(source.index)"
-              >
+              <span class="sf-source-preview-name">
                 {{ source.name }}
               </span>
               <el-button
@@ -86,7 +82,7 @@ const filteredGroups = computed(() => {
       </el-table-column>
       <el-table-column label="源字段" min-width="140" show-overflow-tooltip>
         <template #default="{ row }">
-          <span style="font-weight: 600">{{ row.key }}</span>
+          <span class="sf-field-name">{{ row.key }}</span>
         </template>
       </el-table-column>
       <el-table-column label="涉及表数" width="100">
@@ -100,6 +96,7 @@ const filteredGroups = computed(() => {
             <el-button
               size="small"
               text
+              :aria-label="`上移输出字段：${row.uniformTarget || row.key}`"
               :disabled="!row.uniformTarget || outputIndex(row.uniformTarget) <= 0"
               @click="store.moveOutputColumnByName(row.uniformTarget ?? '', -1)"
             >
@@ -108,6 +105,7 @@ const filteredGroups = computed(() => {
             <el-button
               size="small"
               text
+              :aria-label="`下移输出字段：${row.uniformTarget || row.key}`"
               :disabled="!row.uniformTarget || outputIndex(row.uniformTarget) < 0 || outputIndex(row.uniformTarget) >= store.planHeaders.length - 1"
               @click="store.moveOutputColumnByName(row.uniformTarget ?? '', 1)"
             >
@@ -133,7 +131,7 @@ const filteredGroups = computed(() => {
             size="small"
             @change="(v: boolean | string | number) => store.setFieldEnabled(row.key, Boolean(v))"
           />
-          <div v-if="row.uniformEnabled === null" style="font-size: 10.5px; color: var(--sf-text-muted)">
+          <div v-if="row.uniformEnabled === null" class="sf-partial-state">
             部分启用
           </div>
         </template>
@@ -169,30 +167,34 @@ const filteredGroups = computed(() => {
       </el-table-column>
       </el-table>
     </div>
-    <div v-else style="padding: 30px 0; text-align: center; color: var(--sf-text-muted); font-size: 12px">
+    <div v-else class="sf-field-batch-empty">
       {{ store.fieldGroups.length === 0 ? "暂无启用表字段" : "没有匹配的字段" }}
     </div>
   </div>
 </template>
 
 <style scoped>
+.sf-field-batch {
+  min-width: 0;
+}
+
 .sf-field-batch-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-xs);
   min-width: 0;
-  margin-bottom: 10px;
+  margin-bottom: var(--space-sm);
 }
 
 .sf-field-batch-search {
-  flex: 0 0 200px;
+  flex: 0 0 12.5rem;
 }
 
 .sf-field-batch-hint {
   flex: 1;
   min-width: 0;
   color: var(--sf-text-muted);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   line-height: 1.4;
   text-align: right;
 }
@@ -205,28 +207,27 @@ const filteredGroups = computed(() => {
 
 .sf-source-preview-list {
   min-width: 0;
-  padding: 6px 24px;
+  padding: var(--space-xs) var(--space-lg);
 }
 
 .sf-source-preview-count {
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2xs);
   color: var(--sf-text-muted);
-  font-size: 11px;
+  font-size: var(--text-2xs);
 }
 
 .sf-source-preview-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  min-height: 30px;
+  gap: var(--space-xs);
+  min-height: 2rem;
   min-width: 0;
 }
 
 .sf-source-preview-name {
   min-width: 0;
   overflow: hidden;
-  cursor: pointer;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -234,6 +235,23 @@ const filteredGroups = computed(() => {
 .sf-source-preview-action {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+.sf-field-name {
+  font-weight: 700;
+}
+
+.sf-partial-state {
+  color: var(--sf-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.sf-field-batch-empty {
+  padding: var(--space-xl) 0;
+  color: var(--sf-text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
 }
 
 @media (max-width: 1080px) {

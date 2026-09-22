@@ -45,10 +45,10 @@ function changeDestination(value: string | number | boolean | undefined) {
 </script>
 
 <template>
-  <div class="sf-bottombar">
+  <section class="sf-bottombar" aria-label="输出与执行">
     <div class="sf-output-row">
       <div class="sf-destination-switch">
-        <span class="sf-output-label">输出到</span>
+        <span class="sf-output-label">本次输出</span>
         <el-radio-group
           :model-value="store.outputDestination"
           size="large"
@@ -95,37 +95,105 @@ function changeDestination(value: string | number | boolean | undefined) {
         <b>{{ store.sheetsMetric }}</b>
       </div>
       <el-button v-if="store.busy" @click="store.cancelMerge()">取消</el-button>
-      <el-button type="primary" size="large" :disabled="!store.canStart" @click="store.startMerge()">
+      <el-button class="sf-run-button" type="primary" size="large" :disabled="!store.canStart" @click="store.startMerge()">
         {{ startLabel }}
       </el-button>
     </div>
     <div class="sf-progress-row">
       <el-progress
+        class="sf-progress"
         :percentage="Math.round(store.progress * 100)"
         :indeterminate="store.busy && store.progress <= 0"
         :show-text="false"
         :stroke-width="8"
-        style="flex: 1"
       />
       <span class="tabular sf-progress-number">{{ Math.round(store.progress * 100) }}%</span>
-      <div class="sf-status" :class="{ error: statusKind === 2 }">
+      <div class="sf-status" :class="{ error: statusKind === 2 }" aria-live="polite">
         <span class="dot"></span>
         <span>{{ statusText }}</span>
       </div>
       <el-button v-if="statusReveal" size="small" @click="store.revealOutput()">在文件夹中显示</el-button>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.sf-output-row, .sf-progress-row { display: flex; align-items: center; gap: 10px; }
-.sf-destination-switch { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.sf-output-label { font-weight: 700; font-size: 12px; }
-.sf-output-input { flex: 1; min-width: 180px; }
-.sf-db-target { flex: 1; min-width: 220px; border: 1px solid var(--sf-border); background: #fff; border-radius: 9px; padding: 6px 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.sf-db-target.incomplete { border-color: var(--el-color-warning-light-5); background: var(--el-color-warning-light-9); }
-.sf-db-target small, .sf-db-target b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sf-db-target small { color: var(--sf-text-muted); font-size: 9.5px; }
-.sf-db-target b { margin-top: 2px; font-size: 12px; }
-.sf-progress-number { font-size: 11px; color: var(--sf-text-muted); width: 42px; text-align: right; }
+.sf-output-row,
+.sf-progress-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.sf-destination-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.sf-output-label {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: var(--text-2xs);
+  letter-spacing: 0.12em;
+}
+
+.sf-output-input {
+  flex: 1;
+  min-width: 180px;
+}
+
+.sf-db-target {
+  flex: 1;
+  min-width: 220px;
+  border: var(--rule-hair) solid var(--sf-border);
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+  border-radius: var(--radius-control);
+  padding: var(--space-xs) var(--space-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+}
+
+.sf-db-target.incomplete {
+  border-color: var(--color-warning);
+  background: var(--color-paper-3);
+  color: var(--color-ink);
+}
+
+.sf-db-target small,
+.sf-db-target b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-db-target small {
+  color: var(--sf-text-muted);
+  font-size: var(--text-2xs);
+}
+
+.sf-db-target b {
+  margin-top: var(--space-3xs);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.sf-progress {
+  flex: 1;
+  min-width: 80px;
+}
+
+.sf-progress-number {
+  width: 42px;
+  color: var(--sf-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: end;
+}
 </style>

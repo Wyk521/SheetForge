@@ -14,16 +14,16 @@ const store = useMergeStore();
     destroy-on-close
     @close="store.closeSourcePreview()"
   >
-    <div style="font-size: 12px; font-weight: 600; margin-bottom: 10px">
+    <div class="sf-preview-dialog-title">
       {{ store.sourcePreviewTitle }}
     </div>
-    <div v-if="store.sourcePreviewLoading" style="padding: 50px 0; text-align: center; color: var(--sf-text-muted)">
+    <div v-if="store.sourcePreviewLoading" class="sf-dialog-empty">
       正在读取源数据…
     </div>
     <template v-else-if="store.sourcePreview">
       <PreviewTableGrid :preview="store.sourcePreview" :max-height="520" />
     </template>
-    <div v-else style="padding: 50px 0; text-align: center; color: var(--sf-text-muted)">
+    <div v-else class="sf-dialog-empty">
       暂无可预览内容
     </div>
     <template #footer>
@@ -31,3 +31,17 @@ const store = useMergeStore();
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+.sf-preview-dialog-title {
+  margin-bottom: var(--space-sm);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.sf-dialog-empty {
+  padding: var(--space-2xl) 0;
+  color: var(--sf-text-muted);
+  text-align: center;
+}
+</style>

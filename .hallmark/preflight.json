@@ -1,0 +1,21 @@
+{
+  "date": "2026-09-22",
+  "framework": "Vue 3 + Vite 6 + Element Plus + Tauri 2",
+  "font_stack": "Segoe UI / Microsoft YaHei UI",
+  "palette": "Existing sf-* CSS custom properties with cool blue accent",
+  "motion": "motion-cut; no animation library",
+  "spacing": "mixed compact desktop values",
+  "preserve": [
+    "Tauri window chrome and commands",
+    "Element Plus component contracts",
+    "three mounted page views and their scroll positions",
+    "merge, preview, validation, and output behaviour"
+  ],
+  "introduced": [
+    "Route Workbench structure",
+    "Cascadia Nightjar-inspired token system",
+    "ticket-route navigation",
+    "perforated execution stub",
+    "Hallmark interaction and responsive gates"
+  ]
+}

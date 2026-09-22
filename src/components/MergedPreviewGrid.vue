@@ -109,11 +109,11 @@ function rowClassName({ row }: { row: MergedPreviewRow }) {
 }
 
 :deep(.sf-merged-preview-group-start.sf-merged-preview-alternate > td) {
-  border-top-color: #67c23a !important;
+  border-top-color: var(--color-rail) !important;
 }
 
 :deep(.sf-merged-preview-alternate:not(.sf-merged-preview-group-start) > td) {
-  background: #fbfdf9;
+  background: var(--color-paper-2);
 }
 
 :deep(.sf-merged-preview-empty-row > td) {
@@ -122,9 +122,9 @@ function rowClassName({ row }: { row: MergedPreviewRow }) {
 }
 
 .sf-merged-preview-empty {
-  padding: 22px;
+  padding: var(--space-lg);
   color: var(--sf-text-muted);
-  font-size: 12px;
+  font-size: var(--text-xs);
   text-align: center;
 }
 </style>

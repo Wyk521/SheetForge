@@ -56,18 +56,22 @@ async function exportReport() {
 </script>
 
 <template>
-  <div>
-    <div style="display: flex; align-items: center; margin-bottom: 12px">
-      <h1 style="font-size: 17px; font-weight: 600; margin: 0">输出预览与检查</h1>
-      <el-radio-group :model-value="subTab" style="margin-left: auto" @change="onSubTabChange">
+  <div class="sf-page sf-page-preview">
+    <div class="sf-page-head sf-preview-head">
+      <div class="sf-page-heading-copy">
+        <p class="sf-page-code"><span>03</span> 核验与交付</p>
+        <h1 class="sf-page-title">输出预览与检查</h1>
+        <p class="sf-page-description">在写入文件或数据库前，先核对列结构、来源分段和检查报告。</p>
+      </div>
+      <el-radio-group class="sf-preview-tabs" :model-value="subTab" @change="onSubTabChange">
         <el-radio-button :value="0">结果预览</el-radio-button>
         <el-radio-button :value="1">检查报告</el-radio-button>
       </el-radio-group>
     </div>
 
     <template v-if="subTab === 0">
-      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px">
-        <span style="font-size: 11px; color: var(--sf-text-muted)">
+      <div class="sf-preview-toolbar">
+        <span class="sf-preview-help">
           所有已选数据表连续显示，每张表前 5 行；表头只显示一次，来源切换处用分隔线区分
         </span>
         <el-tag
@@ -85,39 +89,116 @@ async function exportReport() {
         <el-tag v-if="store.preview" type="info" size="small" effect="plain">
           {{ store.preview.groups.length }} 张来源表
         </el-tag>
-        <el-button style="margin-left: auto" @click="store.showMergedPreview()">刷新预览</el-button>
+        <el-button class="sf-toolbar-end" @click="store.showMergedPreview()">刷新预览</el-button>
       </div>
-      <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px">{{ store.previewTitle }}</div>
+      <div class="sf-preview-title">{{ store.previewTitle }}</div>
       <MergedPreviewGrid v-if="store.preview" :preview="store.preview" />
-      <div v-else style="color: var(--sf-text-muted); font-size: 12px; padding: 40px 0; text-align: center">
+      <div v-else class="sf-preview-empty">
         点击「刷新预览」生成合并结果预览
       </div>
     </template>
 
     <template v-else>
-      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px">
-        <span :style="{ fontSize: '12px', fontWeight: 600, color: store.checkRan && store.checkIssues.length === 0 ? '#67c23a' : undefined }">
+      <div class="sf-check-toolbar">
+        <span class="sf-check-summary" :class="{ 'is-clear': store.checkRan && store.checkIssues.length === 0 }">
           {{ checkSummary }}
         </span>
-        <div style="margin-left: auto; display: flex; gap: 8px">
+        <div class="sf-toolbar-actions">
           <el-button @click="store.runPreflight(false)">重新检查</el-button>
           <el-button @click="exportReport()">导出报告</el-button>
         </div>
       </div>
-      <div style="display: flex; flex-direction: column; gap: 8px">
-        <el-card v-for="(issue, index) in store.checkIssues" :key="index" shadow="never" style="border-left: 4px solid">
-          <div style="display: flex; gap: 10px; align-items: flex-start">
+      <div class="sf-issue-list">
+        <el-card v-for="(issue, index) in store.checkIssues" :key="index" class="sf-issue-card" shadow="never">
+          <div class="sf-issue-row">
             <el-tag :type="levelTag(issue.level) as any" size="small">{{ levelLabel(issue.level) }}</el-tag>
             <div>
-              <div style="font-weight: 600; font-size: 12.5px">{{ issue.title }}</div>
-              <div style="color: var(--sf-text-secondary); font-size: 11px; margin-top: 2px">{{ issue.detail }}</div>
+              <div class="sf-issue-title">{{ issue.title }}</div>
+              <div class="sf-issue-detail">{{ issue.detail }}</div>
             </div>
           </div>
         </el-card>
-        <div v-if="store.checkIssues.length === 0 && store.checkRan" style="text-align: center; color: var(--sf-text-muted); padding: 30px 0">
+        <div v-if="store.checkIssues.length === 0 && store.checkRan" class="sf-check-empty">
           未发现问题
         </div>
       </div>
     </template>
   </div>
 </template>
+
+<style scoped>
+.sf-preview-head {
+  align-items: end;
+}
+
+.sf-preview-tabs {
+  flex-shrink: 0;
+}
+
+.sf-preview-toolbar,
+.sf-check-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-sm);
+  min-width: 0;
+}
+
+.sf-preview-help {
+  color: var(--sf-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.sf-toolbar-end,
+.sf-toolbar-actions {
+  margin-inline-start: auto;
+}
+
+.sf-toolbar-actions {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.sf-preview-title,
+.sf-check-summary,
+.sf-issue-title {
+  font-weight: 700;
+  font-size: var(--text-sm);
+}
+
+.sf-preview-title {
+  margin-bottom: var(--space-xs);
+}
+
+.sf-preview-empty,
+.sf-check-empty {
+  padding: var(--space-2xl) 0;
+  color: var(--sf-text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.sf-check-summary.is-clear {
+  color: var(--color-success);
+}
+
+.sf-issue-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.sf-issue-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+}
+
+.sf-issue-detail {
+  margin-top: var(--space-3xs);
+  color: var(--sf-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+</style>

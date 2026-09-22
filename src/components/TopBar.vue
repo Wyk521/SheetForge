@@ -2,34 +2,52 @@
 import { useMergeStore } from "../stores/merge";
 
 const store = useMergeStore();
+
+const stages = [
+  { index: 0, code: "01", label: "数据源" },
+  { index: 1, code: "02", label: "合并工作区" },
+  { index: 2, code: "03", label: "输出预览" },
+];
 </script>
 
 <template>
-  <div class="sf-topbar">
-    <el-menu
-      mode="horizontal"
-      :default-active="String(store.activePage)"
-      :ellipsis="false"
-      class="sf-nav"
-      @select="(index: string) => (store.activePage = Number(index))"
-    >
-      <el-menu-item index="0">数据源</el-menu-item>
-      <el-menu-item index="1">合并工作区</el-menu-item>
-      <el-menu-item index="2">输出预览</el-menu-item>
-    </el-menu>
-    <div style="flex: 1"></div>
-    <el-button text :disabled="!store.hasSources || store.busy" @click="store.saveScheme()">
-      保存方案
-    </el-button>
-    <el-button text :disabled="store.busy" @click="store.openScheme()">打开方案</el-button>
-    <el-button text :disabled="store.busy" @click="store.openDatabaseConnections()">数据库连接</el-button>
-    <el-button text @click="store.showAbout = true">关于</el-button>
-  </div>
+  <header class="sf-topbar">
+    <nav class="sf-route-nav" aria-label="合并流程">
+      <button
+        v-for="stage in stages"
+        :key="stage.index"
+        type="button"
+        class="sf-route-stop"
+        :class="{
+          'is-active': store.activePage === stage.index,
+          'is-complete': store.activePage > stage.index,
+        }"
+        :aria-current="store.activePage === stage.index ? 'step' : undefined"
+        @click="store.activePage = stage.index"
+      >
+        <span class="sf-route-code">{{ stage.code }}</span>
+        <span class="sf-route-node" aria-hidden="true"></span>
+        <span class="sf-route-copy">
+          <strong>{{ stage.label }}</strong>
+        </span>
+      </button>
+    </nav>
+
+    <div class="sf-topbar-actions" aria-label="方案与设置">
+      <el-button text :disabled="!store.hasSources || store.busy" @click="store.saveScheme()">
+        保存方案
+      </el-button>
+      <el-button text :disabled="store.busy" @click="store.openScheme()">打开方案</el-button>
+      <el-button text :disabled="store.busy" @click="store.openDatabaseConnections()">数据库连接</el-button>
+      <el-button text @click="store.showAbout = true">关于</el-button>
+    </div>
+  </header>
 </template>
 
 <style scoped>
-.sf-nav {
-  border-bottom: none;
-  margin-left: 8px;
+.sf-topbar-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 </style>

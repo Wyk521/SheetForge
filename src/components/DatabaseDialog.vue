@@ -53,7 +53,7 @@ function finish() {
   <el-dialog
     v-model="store.showDatabaseDialog"
     title="PostgreSQL 本次导入目标"
-    width="760px"
+    width="min(760px, 92vw)"
     top="10vh"
     destroy-on-close
     :close-on-click-modal="false"
@@ -69,7 +69,7 @@ function finish() {
       <el-select
         v-model="store.databaseImport.profile_name"
         size="large"
-        style="width: 100%"
+        class="db-full-control"
         placeholder="请选择连接"
         @change="changeProfile"
       >
@@ -102,7 +102,7 @@ function finish() {
           <el-input v-model="store.databaseImport.table" placeholder="例如：customer_data" />
         </el-form-item>
         <el-form-item label="表已存在时">
-          <el-select v-model="store.databaseImport.if_exists" style="width: 100%">
+          <el-select v-model="store.databaseImport.if_exists" class="db-full-control">
             <el-option label="停止（最安全）" value="abort" />
             <el-option label="追加数据" value="append" />
             <el-option label="清空后导入" value="truncate" />
@@ -110,7 +110,7 @@ function finish() {
           </el-select>
         </el-form-item>
         <el-form-item label="COPY 格式">
-          <el-select v-model="store.databaseImport.copy_format" style="width: 100%">
+          <el-select v-model="store.databaseImport.copy_format" class="db-full-control">
             <el-option label="二进制（推荐）" value="binary" />
             <el-option label="文本" value="text" />
           </el-select>
@@ -132,7 +132,7 @@ function finish() {
         type="warning"
         :closable="false"
         show-icon
-        style="margin-top: 12px"
+        class="db-warning"
       />
     </section>
 
@@ -144,11 +144,18 @@ function finish() {
 </template>
 
 <style scoped>
-.db-section-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.db-section-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-sm); }
 .db-section-heading b, .db-section-heading span { display: block; }
-.db-section-heading b { font-size: 14px; }
-.db-section-heading span { font-size: 11px; color: var(--sf-text-muted); margin-top: 3px; }
-.db-selected-summary { color: var(--sf-text-muted); font-size: 11px; margin-top: 7px; }
-.db-target-form { display: grid; grid-template-columns: 0.75fr 1.25fr 1fr 1fr; gap: 0 12px; }
-.db-switches { display: flex; flex-wrap: wrap; column-gap: 18px; row-gap: 4px; }
+.db-section-heading b { font-size: var(--text-base); }
+.db-section-heading span { margin-top: var(--space-3xs); color: var(--sf-text-muted); font-size: var(--text-2xs); }
+.db-selected-summary { margin-top: var(--space-xs); color: var(--sf-text-muted); font-size: var(--text-2xs); }
+.db-target-form { display: grid; grid-template-columns: 0.75fr 1.25fr 1fr 1fr; gap: 0 var(--space-sm); }
+.db-switches { display: flex; flex-wrap: wrap; column-gap: var(--space-lg); row-gap: var(--space-2xs); }
+.db-full-control { width: 100%; }
+.db-warning { margin-top: var(--space-sm); }
+
+@media (max-width: 48rem) {
+  .db-target-form { grid-template-columns: minmax(0, 1fr); }
+  .db-section-heading { flex-direction: column; gap: var(--space-xs); }
+}
 </style>
