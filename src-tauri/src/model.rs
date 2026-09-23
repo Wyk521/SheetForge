@@ -5,11 +5,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MergeMode {
-    Union,
-    Intersection,
     Manual,
-    Consolidate,
-    Join,
+    Intersection,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -38,23 +35,6 @@ impl TransformOp {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AggregateOp {
-    #[default]
-    First,
-    Sum,
-    UniqueJoin,
-    TextJoin,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum JoinKind {
-    #[default]
-    Left,
-    Inner,
-    Full,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ColumnMapping {
     pub source_index: usize,
@@ -63,8 +43,6 @@ pub struct ColumnMapping {
     pub enabled: bool,
     #[serde(default)]
     pub transform: TransformOp,
-    #[serde(default)]
-    pub aggregate: AggregateOp,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -108,12 +86,6 @@ pub struct MergeOptions {
     #[serde(default)]
     pub deduplicate: bool,
     #[serde(default)]
-    pub key_columns: Vec<String>,
-    #[serde(default)]
-    pub join_kind: JoinKind,
-    #[serde(default = "default_join_separator")]
-    pub text_join_separator: String,
-    #[serde(default)]
     pub filter_column: String,
     #[serde(default)]
     pub filter_text: String,
@@ -121,21 +93,14 @@ pub struct MergeOptions {
     pub filter_exclude: bool,
 }
 
-fn default_join_separator() -> String {
-    "；".to_owned()
-}
-
 impl Default for MergeOptions {
     fn default() -> Self {
         Self {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             include_source_file: false,
             include_source_sheet: false,
             output_order: Vec::new(),
             deduplicate: false,
-            key_columns: Vec::new(),
-            join_kind: JoinKind::Left,
-            text_join_separator: default_join_separator(),
             filter_column: String::new(),
             filter_text: String::new(),
             filter_exclude: false,
@@ -194,7 +159,6 @@ pub fn make_default_mappings(headers: &[String]) -> Vec<ColumnMapping> {
             target_name: name.clone(),
             enabled: true,
             transform: TransformOp::None,
-            aggregate: AggregateOp::First,
         })
         .collect()
 }
@@ -202,19 +166,18 @@ pub fn make_default_mappings(headers: &[String]) -> Vec<ColumnMapping> {
 pub fn build_output_plan(tables: &[SourceTable], options: &MergeOptions) -> OutputPlan {
     let enabled: Vec<&SourceTable> = tables.iter().filter(|table| table.enabled).collect();
     let mut headers = match options.mode {
-        MergeMode::Union | MergeMode::Consolidate | MergeMode::Join => union_headers(&enabled),
-        MergeMode::Intersection => intersection_headers(&enabled),
         MergeMode::Manual => manual_headers(&enabled),
+        MergeMode::Intersection => intersection_headers(&enabled),
     };
 
     // 来源列先并入列集，使其能参与 output_order 排序（可排在任意位置），
     // 而不是固定追加在末尾。
-    if options.include_source_file {
-        push_unique_metadata(&mut headers, "来源文件");
-    }
-    if options.include_source_sheet {
-        push_unique_metadata(&mut headers, "来源工作表");
-    }
+    let source_file_name = options
+        .include_source_file
+        .then(|| push_unique_metadata(&mut headers, "来源文件"));
+    let source_sheet_name = options
+        .include_source_sheet
+        .then(|| push_unique_metadata(&mut headers, "来源工作表"));
 
     if !options.output_order.is_empty() {
         let positions: HashMap<String, usize> = options
@@ -232,17 +195,17 @@ pub fn build_output_plan(tables: &[SourceTable], options: &MergeOptions) -> Outp
     }
 
     // 排序后重新定位来源列的实际位置
-    let source_file_column = options.include_source_file.then(|| {
+    let source_file_column = source_file_name.map(|name| {
         headers
             .iter()
-            .position(|name| header_key(name) == header_key("来源文件"))
-            .unwrap_or(0)
+            .position(|header| header_key(header) == header_key(&name))
+            .expect("source file column was just inserted")
     });
-    let source_sheet_column = options.include_source_sheet.then(|| {
+    let source_sheet_column = source_sheet_name.map(|name| {
         headers
             .iter()
-            .position(|name| header_key(name) == header_key("来源工作表"))
-            .unwrap_or(0)
+            .position(|header| header_key(header) == header_key(&name))
+            .expect("source sheet column was just inserted")
     });
 
     OutputPlan {
@@ -264,19 +227,6 @@ pub fn common_header_keys(tables: &[SourceTable]) -> HashSet<String> {
         common.retain(|key| current.contains(key));
     }
     common
-}
-
-fn union_headers(tables: &[&SourceTable]) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut output = Vec::new();
-    for table in tables {
-        for header in &table.headers {
-            if seen.insert(header_key(header)) {
-                output.push(header.clone());
-            }
-        }
-    }
-    output
 }
 
 fn intersection_headers(tables: &[&SourceTable]) -> Vec<String> {
@@ -314,7 +264,7 @@ fn manual_headers(tables: &[&SourceTable]) -> Vec<String> {
     output
 }
 
-fn push_unique_metadata(headers: &mut Vec<String>, base: &str) -> usize {
+fn push_unique_metadata(headers: &mut Vec<String>, base: &str) -> String {
     let mut name = base.to_owned();
     let mut suffix = 2;
     let existing: HashSet<String> = headers.iter().map(|h| header_key(h)).collect();
@@ -322,8 +272,8 @@ fn push_unique_metadata(headers: &mut Vec<String>, base: &str) -> usize {
         name = format!("_{base}{suffix}");
         suffix += 1;
     }
-    headers.push(name);
-    headers.len() - 1
+    headers.push(name.clone());
+    name
 }
 
 pub fn source_to_output_map(
@@ -339,19 +289,17 @@ pub fn source_to_output_map(
         .collect();
 
     match mode {
-        MergeMode::Union | MergeMode::Intersection | MergeMode::Consolidate | MergeMode::Join => {
-            table
-                .headers
-                .iter()
-                .enumerate()
-                .filter_map(|(source_index, name)| {
-                    output_indices
-                        .get(&header_key(name))
-                        .copied()
-                        .map(|output_index| (source_index, output_index))
-                })
-                .collect()
-        }
+        MergeMode::Intersection => table
+            .headers
+            .iter()
+            .enumerate()
+            .filter_map(|(source_index, name)| {
+                output_indices
+                    .get(&header_key(name))
+                    .copied()
+                    .map(|output_index| (source_index, output_index))
+            })
+            .collect(),
         MergeMode::Manual => table
             .mappings
             .iter()
@@ -417,12 +365,12 @@ mod tests {
     }
 
     #[test]
-    fn union_and_intersection_preserve_first_table_order() {
+    fn manual_and_intersection_preserve_first_table_order() {
         let tables = vec![table(&["姓名", "年龄"]), table(&["姓名", "城市"])];
-        let union = build_output_plan(
+        let manual = build_output_plan(
             &tables,
             &MergeOptions {
-                mode: MergeMode::Union,
+                mode: MergeMode::Manual,
                 ..Default::default()
             },
         );
@@ -433,12 +381,12 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(union.headers, vec!["姓名", "年龄", "城市"]);
+        assert_eq!(manual.headers, vec!["姓名", "年龄", "城市"]);
         assert_eq!(intersection.headers, vec!["姓名"]);
     }
 
     #[test]
-    fn manual_defaults_to_union_and_common_headers_are_detected() {
+    fn manual_includes_enabled_mapping_targets_and_common_headers_are_detected() {
         let tables = vec![table(&["姓名", "手机号"]), table(&["姓名", "联系电话"])];
         let manual = build_output_plan(
             &tables,
@@ -477,7 +425,7 @@ mod tests {
         let plan = build_output_plan(
             &tables,
             &MergeOptions {
-                mode: MergeMode::Union,
+                mode: MergeMode::Manual,
                 include_source_sheet: true,
                 output_order: vec![
                     "来源工作表".to_owned(),
@@ -499,7 +447,7 @@ mod tests {
         let plan = build_output_plan(
             &tables,
             &MergeOptions {
-                mode: MergeMode::Union,
+                mode: MergeMode::Manual,
                 include_source_sheet: true,
                 output_order: vec![
                     "姓名".to_owned(),
@@ -516,16 +464,31 @@ mod tests {
     #[test]
     fn merge_options_round_trip_as_scheme_data() {
         let options = MergeOptions {
-            mode: MergeMode::Join,
-            key_columns: vec!["订单号".to_owned(), "日期".to_owned()],
-            join_kind: JoinKind::Full,
+            mode: MergeMode::Manual,
             deduplicate: true,
             ..Default::default()
         };
         let json = serde_json::to_string(&options).unwrap();
         let restored: MergeOptions = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.mode, MergeMode::Join);
-        assert_eq!(restored.join_kind, JoinKind::Full);
-        assert_eq!(restored.key_columns.len(), 2);
+        assert_eq!(restored.mode, MergeMode::Manual);
+        assert!(restored.deduplicate);
+    }
+
+    #[test]
+    fn source_metadata_keeps_original_column_with_same_name() {
+        let plan = build_output_plan(
+            &[table(&["来源文件", "来源工作表", "值"])],
+            &MergeOptions {
+                include_source_file: true,
+                include_source_sheet: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            plan.headers,
+            vec!["来源文件", "来源工作表", "值", "_来源文件2", "_来源工作表2"]
+        );
+        assert_eq!(plan.source_file_column, Some(3));
+        assert_eq!(plan.source_sheet_column, Some(4));
     }
 }

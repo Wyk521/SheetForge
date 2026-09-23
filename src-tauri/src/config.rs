@@ -1,4 +1,5 @@
-use crate::model::{MergeOptions, SourceTable};
+use crate::model::{build_output_plan, MergeOptions, SourceTable};
+use crate::scan::refresh_saved_table;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -42,18 +43,37 @@ pub fn save_scheme(path: &Path, scheme: &MergeScheme) -> Result<()> {
 pub fn load_scheme(path: &Path) -> Result<MergeScheme> {
     let content =
         fs::read_to_string(path).with_context(|| format!("无法读取方案 {}", path.display()))?;
-    let scheme: MergeScheme =
+    let value: serde_json::Value =
         serde_json::from_str(&content).with_context(|| "方案文件格式不正确")?;
+    if let Some(mode) = value
+        .pointer("/options/mode")
+        .and_then(|value| value.as_str())
+    {
+        if !matches!(mode, "Manual" | "Intersection") {
+            anyhow::bail!("方案使用了已移除的合并方式“{mode}”，请重新扫描并创建方案");
+        }
+    }
+    let mut scheme: MergeScheme =
+        serde_json::from_value(value).with_context(|| "方案文件格式不正确")?;
     if scheme.format_version > 1 {
         anyhow::bail!("该方案由更高版本的软件创建，当前版本无法读取");
     }
-    for table in &scheme.tables {
+    let saved_output_order = build_output_plan(&scheme.tables, &scheme.options).headers;
+    let mut column_order_changed = false;
+    for table in &mut scheme.tables {
         if table.header_row == 0 || table.header_rows == 0 || table.header_rows > 3 {
             anyhow::bail!(
                 "方案中“{}”的表头设置无效（开始行需 ≥ 1，占用行数需为 1–3）",
                 table.display_name()
             );
         }
+        let refreshed = refresh_saved_table(table)
+            .with_context(|| format!("重新读取方案中的“{}”失败", table.display_name()))?;
+        column_order_changed |= table.headers != refreshed.headers;
+        *table = refreshed;
+    }
+    if column_order_changed && scheme.options.output_order.is_empty() {
+        scheme.options.output_order = saved_output_order;
     }
     Ok(scheme)
 }
@@ -139,8 +159,58 @@ mod tests {
     fn valid_scheme_round_trips() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("ok.json");
-        save_scheme(&path, &scheme_with_header(1, 1)).unwrap();
+        let mut scheme = scheme_with_header(1, 1);
+        scheme.tables[0].path = directory.path().join("a.csv");
+        std::fs::write(&scheme.tables[0].path, "姓名\n张三\n").unwrap();
+        save_scheme(&path, &scheme).unwrap();
         assert!(load_scheme(&path).is_ok());
+    }
+
+    #[test]
+    fn scheme_refreshes_changed_source_column_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scheme.json");
+        let csv = directory.path().join("a.csv");
+        std::fs::write(&csv, "name,city\nAlice,Paris\n").unwrap();
+        let mut scheme = scheme_with_header(1, 1);
+        scheme.tables[0] = crate::scan::scan_file(&csv).unwrap().0.remove(0);
+        scheme.tables[0].mappings[0].target_name = "姓名".to_owned();
+        save_scheme(&path, &scheme).unwrap();
+
+        std::fs::write(&csv, "city,name\nParis,Alice\n").unwrap();
+        let restored = load_scheme(&path).unwrap();
+        assert_eq!(restored.tables[0].headers, vec!["city", "name"]);
+        assert_eq!(restored.tables[0].mappings[1].source_index, 1);
+        assert_eq!(restored.tables[0].mappings[1].target_name, "姓名");
+        assert_eq!(restored.options.output_order, vec!["姓名", "city"]);
+    }
+
+    #[test]
+    fn scheme_rejects_changed_source_headers() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scheme.json");
+        let csv = directory.path().join("a.csv");
+        std::fs::write(&csv, "name,city\nAlice,Paris\n").unwrap();
+        let mut scheme = scheme_with_header(1, 1);
+        scheme.tables[0] = crate::scan::scan_file(&csv).unwrap().0.remove(0);
+        save_scheme(&path, &scheme).unwrap();
+
+        std::fs::write(&csv, "name,country\nAlice,France\n").unwrap();
+        assert!(load_scheme(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("重新读取方案"));
+    }
+
+    #[test]
+    fn scheme_rejects_removed_merge_mode_with_clear_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("old.json");
+        let mut value = serde_json::to_value(scheme_with_header(1, 1)).unwrap();
+        value["options"]["mode"] = serde_json::json!("Join");
+        std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+        let error = load_scheme(&path).unwrap_err().to_string();
+        assert!(error.contains("已移除的合并方式"), "{error}");
     }
 
     #[test]

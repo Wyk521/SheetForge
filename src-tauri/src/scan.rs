@@ -98,6 +98,23 @@ pub(crate) fn for_each_xlsx_row<F>(
 where
     F: FnMut(Vec<Data>) -> Result<()>,
 {
+    // The first non-empty cell can be a centered title. Find the leftmost actual
+    // column before emitting rows so later header cells cannot overwrite it.
+    let mut bounds_reader = workbook
+        .worksheet_cells_reader(sheet_name)
+        .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
+    let mut base_column = None;
+    while let Some(cell) = bounds_reader.next_cell()? {
+        let value = Data::from(cell.get_value().clone());
+        if !is_effectively_empty(&value) {
+            let column = cell.get_position().1;
+            base_column = Some(base_column.map_or(column, |base: u32| base.min(column)));
+            if base_column == Some(0) {
+                break;
+            }
+        }
+    }
+    drop(bounds_reader);
     let mut reader = workbook
         .worksheet_cells_reader(sheet_name)
         .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
@@ -159,8 +176,7 @@ where
             continue;
         }
 
-        let base_column = actual_start.map(|(_, column)| column).unwrap_or(column);
-        let relative_column = column.saturating_sub(base_column) as usize;
+        let relative_column = column.saturating_sub(base_column.unwrap_or(column)) as usize;
         if current.len() <= relative_column {
             current.resize(relative_column + 1, Data::Empty);
         }
@@ -419,16 +435,50 @@ fn preserve_mappings(old: &SourceTable, new: &mut SourceTable) {
         if let Some(previous) = old
             .mappings
             .iter()
-            .find(|previous| previous.source_name == mapping.source_name)
+            .find(|previous| header_key(&previous.source_name) == header_key(&mapping.source_name))
         {
+            let source_name = mapping.source_name.clone();
+            let source_index = mapping.source_index;
             *mapping = previous.clone();
-            mapping.source_index = new
-                .headers
-                .iter()
-                .position(|header| header == &mapping.source_name)
-                .unwrap_or(mapping.source_index);
+            mapping.source_name = source_name;
+            mapping.source_index = source_index;
         }
     }
+}
+
+pub fn refresh_saved_table(old: &SourceTable) -> Result<SourceTable> {
+    let mut current = match old.kind {
+        SourceKind::Csv { delimiter } => scan_csv(
+            &old.path,
+            delimiter,
+            old.header_row,
+            old.header_rows,
+            old.suggested_header_row,
+        )?,
+        SourceKind::Workbook => scan_workbook_sheet(
+            &old.path,
+            &old.sheet_name,
+            old.header_row,
+            old.header_rows,
+            old.suggested_header_row,
+        )?,
+    };
+    let saved = old
+        .headers
+        .iter()
+        .map(|h| header_key(h))
+        .collect::<HashSet<_>>();
+    let found = current
+        .headers
+        .iter()
+        .map(|h| header_key(h))
+        .collect::<HashSet<_>>();
+    if old.headers.len() != current.headers.len() || saved != found {
+        anyhow::bail!("源表表头已变化，请重新扫描并配置字段映射");
+    }
+    current.enabled = old.enabled;
+    preserve_mappings(old, &mut current);
+    Ok(current)
 }
 
 fn scan_csv_auto(path: &Path) -> Result<SourceTable> {

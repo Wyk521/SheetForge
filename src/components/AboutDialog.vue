@@ -26,7 +26,7 @@ async function openUpdatePage() {
         </div>
         <div class="sf-about-features">
           <div>· 递归扫描文件夹，支持 xlsx / xlsm / xls / xlsb / ods / csv / tsv</div>
-          <div>· 五种合并方式：并集、交集、修正表头、按键汇总、横向关联</div>
+          <div>· 两种合并方式：修正表头、列名交集</div>
           <div>· 所有处理都在本机完成，仅“检查更新”会联网</div>
         </div>
       </div>

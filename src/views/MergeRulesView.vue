@@ -7,19 +7,11 @@ import type { MergeMode } from "../types";
 const store = useMergeStore();
 
 const modes: { value: MergeMode; label: string }[] = [
-  { value: "Union", label: "列名并集" },
-  { value: "Intersection", label: "列名交集" },
   { value: "Manual", label: "修正表头" },
-  { value: "Consolidate", label: "按键汇总" },
-  { value: "Join", label: "横向关联" },
+  { value: "Intersection", label: "列名交集" },
 ];
 
-const mappingEnabled = computed(
-  () =>
-    store.options.mode === "Manual" ||
-    store.options.mode === "Consolidate" ||
-    store.options.mode === "Join"
-);
+const mappingEnabled = computed(() => store.options.mode === "Manual");
 
 function onModeChange(mode: MergeMode) {
   store.setMode(mode);
@@ -32,7 +24,7 @@ function onModeChange(mode: MergeMode) {
       <div class="sf-page-heading-copy">
         <p class="sf-page-code"><span>02</span> 规则与字段</p>
         <h1 class="sf-page-title">合并工作区</h1>
-        <p class="sf-page-description">选择合并方式，再核对输出字段、键字段与筛选条件。</p>
+        <p class="sf-page-description">选择合并方式，再核对输出字段与筛选条件。</p>
       </div>
     </div>
 
@@ -70,30 +62,8 @@ function onModeChange(mode: MergeMode) {
               inactive-text="删除重复行"
               @change="(v: boolean | string | number) => store.setAdvanced({ deduplicate: Boolean(v) })"
             />
-            <div class="sf-option-note">
-              有键字段时按键，否则按整行
-            </div>
+            <div class="sf-option-note">按完整输出行去重</div>
           </div>
-        </el-card>
-
-        <el-card shadow="never">
-          <div class="sf-card-heading">键字段（多个用英文逗号分隔）</div>
-          <el-input
-            :model-value="store.options.key_columns.join(', ')"
-            placeholder="例如：订单号, 日期"
-            @update:model-value="(v: string) => store.setAdvanced({ key_columns: v.split(/[,，]/).map((s) => s.trim()).filter(Boolean) })"
-          />
-          <template v-if="store.options.mode === 'Join'">
-            <div class="sf-card-heading sf-card-heading-spaced">关联方式</div>
-            <el-radio-group
-              :model-value="store.options.join_kind"
-              @change="(v: string | number | boolean | undefined) => store.setAdvanced({ join_kind: String(v) as never })"
-            >
-              <el-radio-button value="Left">左关联</el-radio-button>
-              <el-radio-button value="Inner">内关联</el-radio-button>
-              <el-radio-button value="Full">全关联</el-radio-button>
-            </el-radio-group>
-          </template>
         </el-card>
 
         <el-card shadow="never">
@@ -169,7 +139,7 @@ function onModeChange(mode: MergeMode) {
             <div class="sf-mode-note">
               <div class="sf-mode-note-title">当前模式不修改字段</div>
               <div class="sf-mode-note-copy">
-                并集 / 交集直接使用原始表头；需要改名、纠错或清洗字段时，请切换到「修正表头」模式。
+                交集直接使用原始表头；需要改名、纠错或清洗字段时，请切换到「修正表头」模式。
               </div>
             </div>
           </template>

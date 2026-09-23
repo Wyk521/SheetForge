@@ -1,15 +1,16 @@
 // 引擎集成测试：真实文件 → 扫描 → 合并 → 读回输出逐格断言。
 // 覆盖刁钻场景：编码（BOM/GBK）、长数字保真、空文件、单列、多行表头、
-// 日期/布尔单元格、去重、筛选、三种关联、汇总求和、来源列、预检校验等。
+// 日期/布尔单元格、去重、筛选、来源列、预检校验等。
 use crate::inspect::preflight_for_destination;
 use crate::inspect::preview_merged;
 use crate::merge::merge_tables;
-use crate::model::{AggregateOp, JoinKind, MergeMode, MergeOptions, SourceTable, TransformOp};
-use crate::scan::scan_file;
-use calamine::{open_workbook_auto, Data, Reader};
+use crate::model::{MergeMode, MergeOptions, SourceTable, TransformOp};
+use crate::scan::{for_each_xlsx_row, scan_file};
+use calamine::{open_workbook, open_workbook_auto, Data, Reader, Xlsx};
 use rust_xlsxwriter::{ExcelDateTime, Format, Workbook};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::{fs::File, io::BufReader};
 
 /// 把 CSV 内容写入临时文件并扫描成 SourceTable。
 fn scan_csv(dir: &tempfile::TempDir, name: &str, content: &str) -> SourceTable {
@@ -78,7 +79,7 @@ fn csv_bom_and_gbk_are_decoded_and_merged() {
     let rows = merge_and_read(
         vec![utf8, gbk],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             ..Default::default()
         },
     );
@@ -102,7 +103,7 @@ fn long_numbers_and_leading_zeros_stay_text() {
     let rows = merge_and_read(
         vec![table],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             ..Default::default()
         },
     );
@@ -121,7 +122,7 @@ fn header_only_csv_merges_to_zero_rows() {
     let rows = merge_and_read(
         vec![table],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             ..Default::default()
         },
     );
@@ -145,7 +146,7 @@ fn single_column_csv_merges() {
     let rows = merge_and_read(
         vec![table],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             ..Default::default()
         },
     );
@@ -175,7 +176,7 @@ fn multi_row_header_workbook_merges() {
     let rows = merge_and_read(
         vec![table],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             ..Default::default()
         },
     );
@@ -233,111 +234,6 @@ fn date_and_boolean_cells_round_trip() {
 }
 
 #[test]
-fn consolidate_sums_text_numbers() {
-    let dir = tempfile::tempdir().unwrap();
-    let table = scan_csv(&dir, "sales.csv", "城市,金额\n北京,10\n北京,20\n上海,30\n");
-    let mut options = MergeOptions {
-        mode: MergeMode::Consolidate,
-        key_columns: vec!["城市".to_owned()],
-        ..Default::default()
-    };
-    // 金额列用求和聚合
-    options.output_order = vec!["城市".to_owned(), "金额".to_owned()];
-    let mut table = table;
-    for mapping in &mut table.mappings {
-        if mapping.source_name == "金额" {
-            mapping.aggregate = AggregateOp::Sum;
-        }
-    }
-    let rows = merge_and_read(vec![table], options);
-    assert_eq!(rows[0], vec!["城市", "金额"]);
-    assert!(
-        rows.contains(&vec!["北京".to_owned(), "30".to_owned()]),
-        "文本数字求和应为 30: {rows:?}"
-    );
-    assert!(rows.contains(&vec!["上海".to_owned(), "30".to_owned()]));
-}
-
-#[test]
-fn consolidate_large_int_sum_keeps_exact_precision() {
-    // 刁钻场景：2^53 + 1，浮点累加会丢一个单位，整数累加须精确得到 9007199254740993
-    let dir = tempfile::tempdir().unwrap();
-    let table = scan_csv(
-        &dir,
-        "big.csv",
-        "城市,金额\n北京,9007199254740992\n北京,1\n",
-    );
-    let mut options = MergeOptions {
-        mode: MergeMode::Consolidate,
-        key_columns: vec!["城市".to_owned()],
-        ..Default::default()
-    };
-    options.output_order = vec!["城市".to_owned(), "金额".to_owned()];
-    let mut table = table;
-    for mapping in &mut table.mappings {
-        if mapping.source_name == "金额" {
-            mapping.aggregate = AggregateOp::Sum;
-        }
-    }
-    let rows = merge_and_read(vec![table], options);
-    assert_eq!(
-        rows[1],
-        vec!["北京".to_owned(), "9007199254740993".to_owned()],
-        "超大整数求和必须精确不丢位: {rows:?}"
-    );
-}
-
-#[test]
-fn consolidate_normal_integer_sum_stays_numeric() {
-    // 常规整数结果仍是数值单元格（Excel 可参与计算），不因精度保护变文本
-    let dir = tempfile::tempdir().unwrap();
-    let table = scan_csv(&dir, "n.csv", "城市,金额\n北京,10\n北京,20\n");
-    let mut options = MergeOptions {
-        mode: MergeMode::Consolidate,
-        key_columns: vec!["城市".to_owned()],
-        ..Default::default()
-    };
-    options.output_order = vec!["城市".to_owned(), "金额".to_owned()];
-    let mut table = table;
-    for mapping in &mut table.mappings {
-        if mapping.source_name == "金额" {
-            mapping.aggregate = AggregateOp::Sum;
-        }
-    }
-    let rows = merge_and_read(vec![table], options);
-    assert_eq!(rows[1], vec!["北京".to_owned(), "30".to_owned()]);
-}
-
-#[test]
-fn consolidate_wide_integer_sum_stays_text_not_scientific() {
-    // 刁钻场景：求和结果达 15 位时，绝不能显示成科学计数法，须保持完整数字
-    let dir = tempfile::tempdir().unwrap();
-    let table = scan_csv(
-        &dir,
-        "w.csv",
-        "城市,金额\n北京,70000000000000\n北京,70000000000000\n",
-    );
-    let mut options = MergeOptions {
-        mode: MergeMode::Consolidate,
-        key_columns: vec!["城市".to_owned()],
-        ..Default::default()
-    };
-    options.output_order = vec!["城市".to_owned(), "金额".to_owned()];
-    let mut table = table;
-    for mapping in &mut table.mappings {
-        if mapping.source_name == "金额" {
-            mapping.aggregate = AggregateOp::Sum;
-        }
-    }
-    let rows = merge_and_read(vec![table], options);
-    assert_eq!(
-        rows[1],
-        vec!["北京".to_owned(), "140000000000000".to_owned()],
-        "15 位求和结果必须是完整数字文本，不得出现科学计数法: {rows:?}"
-    );
-}
-
-#[test]
 fn dedup_and_filter_work_together() {
     let dir = tempfile::tempdir().unwrap();
     let table = scan_csv(
@@ -348,7 +244,7 @@ fn dedup_and_filter_work_together() {
     let rows = merge_and_read(
         vec![table],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             deduplicate: true,
             ..Default::default()
         },
@@ -360,7 +256,7 @@ fn dedup_and_filter_work_together() {
     let rows = merge_and_read(
         vec![table2],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             filter_column: "城市".to_owned(),
             filter_text: "北".to_owned(),
             ..Default::default()
@@ -368,31 +264,6 @@ fn dedup_and_filter_work_together() {
     );
     assert_eq!(rows.len(), 2, "筛选后只剩北京一行");
     assert_eq!(rows[1], vec!["张三", "北京"]);
-}
-
-#[test]
-fn join_left_inner_full() {
-    let dir = tempfile::tempdir().unwrap();
-    let left = scan_csv(&dir, "left.csv", "id,姓名\n1,张三\n2,李四\n");
-    let right = scan_csv(&dir, "right.csv", "id,城市\n1,北京\n3,上海\n");
-
-    let run = |kind: JoinKind| {
-        merge_and_read(
-            vec![left.clone(), right.clone()],
-            MergeOptions {
-                mode: MergeMode::Join,
-                key_columns: vec!["id".to_owned()],
-                join_kind: kind,
-                ..Default::default()
-            },
-        )
-    };
-    let left_rows = run(JoinKind::Left);
-    assert_eq!(left_rows.len(), 3, "左关联：2 条数据");
-    let inner_rows = run(JoinKind::Inner);
-    assert_eq!(inner_rows.len(), 2, "内关联：1 条数据");
-    let full_rows = run(JoinKind::Full);
-    assert_eq!(full_rows.len(), 4, "全关联：3 条数据");
 }
 
 #[test]
@@ -407,7 +278,7 @@ fn transforms_and_source_columns() {
     let rows = merge_and_read(
         vec![table],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             include_source_file: true,
             include_source_sheet: true,
             ..Default::default()
@@ -427,7 +298,7 @@ fn source_sheet_column_in_the_middle_keeps_data_aligned() {
     let rows = merge_and_read(
         vec![table],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             include_source_sheet: true,
             output_order: vec![
                 "姓名".to_owned(),
@@ -506,7 +377,7 @@ fn workbook_multiple_sheets_all_merge() {
     let rows = merge_and_read(
         tables,
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             ..Default::default()
         },
     );
@@ -518,7 +389,7 @@ fn preflight_catches_missing_filter_column() {
     let dir = tempfile::tempdir().unwrap();
     let table = scan_csv(&dir, "a.csv", "姓名\n张三\n");
     let options = MergeOptions {
-        mode: MergeMode::Union,
+        mode: MergeMode::Manual,
         filter_column: "不存在的列".to_owned(),
         filter_text: "x".to_owned(),
         ..Default::default()
@@ -554,19 +425,19 @@ fn xlsx_preflight_samples_only_data_rows() {
 }
 
 #[test]
-fn union_merges_intersection_and_manual() {
+fn manual_merges_intersection_and_mapping_changes() {
     let dir = tempfile::tempdir().unwrap();
     let a = scan_csv(&dir, "a.csv", "姓名,年龄\n张三,30\n");
     let b = scan_csv(&dir, "b.csv", "姓名,城市\n张三,北京\n");
 
-    let union = merge_and_read(
+    let default_manual = merge_and_read(
         vec![a.clone(), b.clone()],
         MergeOptions {
-            mode: MergeMode::Union,
+            mode: MergeMode::Manual,
             ..Default::default()
         },
     );
-    assert_eq!(union[0], vec!["姓名", "年龄", "城市"]);
+    assert_eq!(default_manual[0], vec!["姓名", "年龄", "城市"]);
 
     let intersection = merge_and_read(
         vec![a.clone(), b.clone()],
@@ -662,4 +533,62 @@ fn multiline_header_renamed_to_plain_header_merges_into_one_column() {
     assert_eq!(rows[0], vec!["客户姓名", "金额"]);
     assert_eq!(rows[1], vec!["张三", "100"]);
     assert_eq!(rows[2], vec!["李四", "200"]);
+}
+
+#[test]
+fn xlsx_centered_title_does_not_overwrite_left_header_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("centered-title.xlsx");
+    let mut workbook = Workbook::new();
+    let sheet = workbook.add_worksheet();
+    sheet.write_string(0, 2, "报表标题").unwrap();
+    for (column, name) in ["first", "second", "third"].iter().enumerate() {
+        sheet.write_string(1, column as u16, *name).unwrap();
+    }
+    sheet.write_string(2, 0, "A").unwrap();
+    sheet.write_string(2, 1, "B").unwrap();
+    sheet.write_string(2, 2, "C").unwrap();
+    workbook.save(&path).unwrap();
+
+    let mut workbook: Xlsx<BufReader<File>> = open_workbook(&path).unwrap();
+    let mut rows = Vec::new();
+    for_each_xlsx_row(&mut workbook, "Sheet1", 1, Some(2), |row| {
+        rows.push(row.iter().map(Data::to_string).collect::<Vec<_>>());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(rows[0], vec!["first", "second", "third"]);
+    assert_eq!(rows[1], vec!["A", "B", "C"]);
+}
+
+#[test]
+fn source_metadata_does_not_overwrite_same_named_input_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(&dir, "source.csv", "来源文件,值\n原始,1\n");
+    let rows = merge_and_read(
+        vec![table],
+        MergeOptions {
+            include_source_file: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(rows[0], vec!["来源文件", "值", "_来源文件2"]);
+    assert_eq!(rows[1], vec!["原始", "1", "source.csv"]);
+}
+
+#[test]
+fn merged_preview_applies_transforms_filter_and_deduplication() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut table = scan_csv(&dir, "source.csv", "name\n A \n A \n B \n");
+    table.mappings[0].transform = TransformOp::Trim;
+    let options = MergeOptions {
+        deduplicate: true,
+        filter_column: "name".to_owned(),
+        filter_text: "A".to_owned(),
+        ..Default::default()
+    };
+    let preview = preview_merged(&[table.clone()], &options, 5).unwrap();
+    let output = merge_and_read(vec![table], options);
+    assert_eq!(preview.groups[0].rows, vec![vec!["A"]]);
+    assert_eq!(output[1..], preview.groups[0].rows);
 }

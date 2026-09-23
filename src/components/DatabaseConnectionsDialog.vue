@@ -180,10 +180,11 @@ function finishManagement() {
           </el-form-item>
           <el-form-item label="SSL 模式">
             <el-select v-model="profile.sslmode" class="db-full-control">
+              <el-option label="allow（先尝试非 SSL）" value="allow" />
               <el-option label="prefer（优先 SSL）" value="prefer" />
               <el-option label="require（必须 SSL）" value="require" />
-              <el-option label="verify-ca" value="verify-ca" />
-              <el-option label="verify-full" value="verify-full" />
+              <el-option label="verify-ca（校验证书链）" value="verify-ca" />
+              <el-option label="verify-full（校验证书链与主机名）" value="verify-full" />
               <el-option label="disable（不使用 SSL）" value="disable" />
             </el-select>
           </el-form-item>

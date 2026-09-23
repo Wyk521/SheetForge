@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { headerKey, useMergeStore } from "../stores/merge";
-import type { AggregateOp, TransformOp } from "../types";
+import type { TransformOp } from "../types";
 
 const store = useMergeStore();
 
@@ -14,13 +14,6 @@ const TRANSFORMS: { value: TransformOp; label: string }[] = [
   { value: "Trim", label: "去空格" },
   { value: "Uppercase", label: "转大写" },
   { value: "Lowercase", label: "转小写" },
-];
-
-const AGGREGATES: { value: AggregateOp; label: string }[] = [
-  { value: "First", label: "取首值" },
-  { value: "Sum", label: "求和" },
-  { value: "UniqueJoin", label: "唯一拼接" },
-  { value: "TextJoin", label: "文本拼接" },
 ];
 
 const filteredGroups = computed(() => {
@@ -145,18 +138,6 @@ const filteredGroups = computed(() => {
             @change="(v: string | number | boolean | undefined) => store.setFieldTransform(row.key, String(v) as TransformOp)"
           >
             <el-option v-for="op in TRANSFORMS" :key="op.value" :label="op.label" :value="op.value" />
-          </el-select>
-        </template>
-      </el-table-column>
-      <el-table-column v-if="store.options.mode === 'Consolidate'" label="汇总方式" width="130">
-        <template #default="{ row }">
-          <el-select
-            :model-value="row.uniformAggregate ?? ''"
-            size="small"
-            placeholder="多值"
-            @change="(v: string | number | boolean | undefined) => store.setFieldAggregate(row.key, String(v) as AggregateOp)"
-          >
-            <el-option v-for="op in AGGREGATES" :key="op.value" :label="op.label" :value="op.value" />
           </el-select>
         </template>
       </el-table-column>

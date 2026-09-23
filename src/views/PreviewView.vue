@@ -74,18 +74,6 @@ async function exportReport() {
         <span class="sf-preview-help">
           所有已选数据表连续显示，每张表前 5 行；表头只显示一次，来源切换处用分隔线区分
         </span>
-        <el-tag
-          v-if="store.options.mode === 'Consolidate' || store.options.mode === 'Join'"
-          type="warning"
-          size="small"
-          effect="plain"
-        >
-          {{
-            store.options.mode === "Consolidate"
-              ? "预览未体现按键汇总结果，仅供列结构参考"
-              : "预览未体现关联结果，仅供列结构参考"
-          }}
-        </el-tag>
         <el-tag v-if="store.preview" type="info" size="small" effect="plain">
           {{ store.preview.groups.length }} 张来源表
         </el-tag>

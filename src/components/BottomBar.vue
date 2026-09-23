@@ -94,7 +94,7 @@ function changeDestination(value: string | number | boolean | undefined) {
         <small>预计 Sheet</small>
         <b>{{ store.sheetsMetric }}</b>
       </div>
-      <el-button v-if="store.busy" @click="store.cancelMerge()">取消</el-button>
+      <el-button v-if="store.phase === 'merging'" @click="store.cancelMerge()">取消</el-button>
       <el-button class="sf-run-button" type="primary" size="large" :disabled="!store.canStart" @click="store.startMerge()">
         {{ startLabel }}
       </el-button>

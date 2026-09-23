@@ -1,6 +1,5 @@
-use crate::model::{
-    build_output_plan, header_key, source_to_output_map, MergeOptions, SourceKind, SourceTable,
-};
+use crate::merge::{preview_mapped_row, CellValue};
+use crate::model::{build_output_plan, header_key, MergeOptions, SourceKind, SourceTable};
 use crate::scan::{decode_csv_field, for_each_xlsx_row, is_xlsx_path};
 use anyhow::{Context, Result};
 use calamine::{open_workbook, open_workbook_auto, Data, Reader, Xlsx};
@@ -101,28 +100,16 @@ pub fn preview_merged(
 ) -> Result<MergedPreview> {
     let plan = build_output_plan(tables, options);
     let mut groups = Vec::new();
+    let mut seen = HashSet::new();
     for (source_index, table) in tables.iter().enumerate().filter(|(_, table)| table.enabled) {
-        let preview = preview_source(table, limit)?;
-        let mapping = source_to_output_map(table, &plan, options.mode);
-        let mut rows = Vec::with_capacity(preview.rows.len());
-        for source_row in preview.rows {
-            let mut output = vec![String::new(); plan.headers.len()];
-            for (source, target) in &mapping {
-                if let Some(value) = source_row.get(*source) {
-                    output[*target] = value.clone();
+        let source_rows = preview_source_values(table, limit)?;
+        let mut rows = Vec::with_capacity(source_rows.len());
+        for source_row in source_rows {
+            if let Some(output) = preview_mapped_row(source_row, table, &plan, options) {
+                if !options.deduplicate || seen.insert(output.clone()) {
+                    rows.push(output);
                 }
             }
-            if let Some(index) = plan.source_file_column {
-                output[index] = table
-                    .path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-            }
-            if let Some(index) = plan.source_sheet_column {
-                output[index] = table.sheet_name.clone();
-            }
-            rows.push(output);
         }
         groups.push(MergedPreviewGroup {
             source_index,
@@ -139,6 +126,54 @@ pub fn preview_merged(
         headers: plan.headers,
         groups,
     })
+}
+
+fn preview_source_values(table: &SourceTable, limit: usize) -> Result<Vec<Vec<CellValue>>> {
+    let mut rows = Vec::new();
+    match table.kind {
+        SourceKind::Csv { delimiter } => {
+            let mut reader = ReaderBuilder::new()
+                .has_headers(false)
+                .flexible(true)
+                .delimiter(delimiter)
+                .from_path(&table.path)?;
+            let skip = table.header_row + table.header_rows - 1;
+            for record in reader.byte_records().skip(skip).take(limit) {
+                rows.push(
+                    record?
+                        .iter()
+                        .map(|value| CellValue::Text(decode_csv_field(value)))
+                        .collect(),
+                );
+            }
+        }
+        SourceKind::Workbook => {
+            if is_xlsx_path(&table.path) {
+                let mut workbook: Xlsx<BufReader<File>> = open_workbook(&table.path)?;
+                for_each_xlsx_row(
+                    &mut workbook,
+                    &table.sheet_name,
+                    table.header_row + table.header_rows - 1,
+                    Some(limit),
+                    |row| {
+                        rows.push(row.iter().map(CellValue::from_calamine).collect());
+                        Ok(())
+                    },
+                )?;
+            } else {
+                let mut workbook = open_workbook_auto(&table.path)?;
+                let range = workbook.worksheet_range(&table.sheet_name)?;
+                rows.extend(
+                    range
+                        .rows()
+                        .skip(table.header_row + table.header_rows - 1)
+                        .take(limit)
+                        .map(|row| row.iter().map(CellValue::from_calamine).collect()),
+                );
+            }
+        }
+    }
+    Ok(rows)
 }
 
 pub fn preflight_for_destination(
@@ -240,7 +275,10 @@ pub fn preflight_for_destination(
             issues.push(issue(
                 IssueLevel::Warning,
                 "字段不一致",
-                &format!("{} 缺少并集中 {missing} 个字段。", table.display_name()),
+                &format!(
+                    "{} 与其他来源相比缺少 {missing} 个字段。",
+                    table.display_name()
+                ),
             ));
         }
         let unnamed = table
@@ -352,17 +390,6 @@ pub fn preflight_for_destination(
             IssueLevel::Warning,
             "疑似同义/错拼字段",
             &similar.join("；"),
-        ));
-    }
-    if matches!(
-        options.mode,
-        crate::model::MergeMode::Consolidate | crate::model::MergeMode::Join
-    ) && options.key_columns.is_empty()
-    {
-        issues.push(issue(
-            IssueLevel::Error,
-            "缺少键字段",
-            "汇总或横向关联至少需要一个键字段。",
         ));
     }
     if !options.filter_text.trim().is_empty() {

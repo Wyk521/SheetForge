@@ -1,7 +1,7 @@
 use crate::inspect::{preflight_for_destination, CheckIssue};
 use crate::model::{
-    build_output_plan, header_key, source_to_output_map, AggregateOp, JoinKind, MergeMode,
-    MergeOptions, OutputPlan, SourceKind, SourceTable, TransformOp,
+    build_output_plan, header_key, source_to_output_map, MergeMode, MergeOptions, OutputPlan,
+    SourceKind, SourceTable, TransformOp,
 };
 use crate::scan::{for_each_csv_row, for_each_xlsx_row, is_xlsx_path};
 use anyhow::{anyhow, Context, Result};
@@ -155,7 +155,7 @@ pub(crate) fn merge_tables(
     }
 }
 
-/// 将 SheetForge 已应用表头修改、交并集、清洗、汇总或关联后的最终行流交给调用方。
+/// 将 SheetForge 已应用表头修改、交集和清洗后的最终行流交给调用方。
 /// PostgreSQL 适配层使用此入口，确保数据库与 XLSX 得到完全相同的业务数据。
 #[cfg(test)]
 pub(crate) fn stream_merged_rows<F>(
@@ -205,10 +205,7 @@ where
     if plan.headers.is_empty() {
         return Err(anyhow!("合并后没有可导入的列，请检查合并方式或字段映射"));
     }
-    let mut sink = CellCallbackSink {
-        write_row,
-        total_rows: 0,
-    };
+    let mut sink = CellCallbackSink { write_row };
     let rows = merge_into_sink(&enabled, options, &plan, &mut sink, emit, cancel)?;
     Ok(rows.map(|rows| (plan, rows)))
 }
@@ -227,13 +224,7 @@ fn merge_into_sink<S: RowSink>(
         .iter()
         .map(|table| build_row_mapping(table, plan, options.mode))
         .collect::<Vec<_>>();
-    match options.mode {
-        MergeMode::Consolidate => {
-            merge_consolidated(tables, &row_mappings, options, plan, sink, emit, cancel)
-        }
-        MergeMode::Join => merge_joined(tables, &row_mappings, options, plan, sink, emit, cancel),
-        _ => merge_appended(tables, &row_mappings, options, plan, sink, emit, cancel),
-    }
+    merge_appended(tables, &row_mappings, options, plan, sink, emit, cancel)
 }
 
 fn merge_appended<S: RowSink>(
@@ -248,7 +239,6 @@ fn merge_appended<S: RowSink>(
     let total = tables.iter().map(|table| table.estimated_rows).sum();
     let mut current = 0_u64;
     let mut dedup = HashSet::new();
-    let key_indices = key_indices(plan, &options.key_columns);
     let mut processed_workbooks = HashSet::<PathBuf>::new();
 
     for (table_index, table) in tables.iter().enumerate() {
@@ -264,7 +254,6 @@ fn merge_appended<S: RowSink>(
                         &row_mappings[table_index],
                         options,
                         plan,
-                        &key_indices,
                         &mut dedup,
                         sink,
                         &mut current,
@@ -311,7 +300,6 @@ fn merge_appended<S: RowSink>(
                                     &row_mappings[sheet_index],
                                     options,
                                     plan,
-                                    &key_indices,
                                     &mut dedup,
                                     sink,
                                     &mut current,
@@ -337,7 +325,6 @@ fn merge_appended<S: RowSink>(
                                 &row_mappings[sheet_index],
                                 options,
                                 plan,
-                                &key_indices,
                                 &mut dedup,
                                 sink,
                                 &mut current,
@@ -361,8 +348,7 @@ fn consume_append_row<S: RowSink>(
     row_mapping: &RowMapping,
     options: &MergeOptions,
     plan: &OutputPlan,
-    key_indices: &[usize],
-    dedup: &mut HashSet<String>,
+    dedup: &mut HashSet<Vec<String>>,
     sink: &mut S,
     current: &mut u64,
     total: u64,
@@ -380,7 +366,7 @@ fn consume_append_row<S: RowSink>(
         return Ok(());
     }
     if options.deduplicate {
-        let key = row_key(&output_row, key_indices);
+        let key = row_key(&output_row);
         if !dedup.insert(key) {
             return Ok(());
         }
@@ -389,163 +375,6 @@ fn consume_append_row<S: RowSink>(
     *current += 1;
     send_progress(*current, total, table.display_name(), emit);
     Ok(())
-}
-
-fn merge_consolidated<S: RowSink>(
-    tables: &[&SourceTable],
-    row_mappings: &[RowMapping],
-    options: &MergeOptions,
-    plan: &OutputPlan,
-    sink: &mut S,
-    emit: &dyn Fn(u64, u64, String),
-    cancel: &AtomicBool,
-) -> Result<Option<u64>> {
-    let keys = key_indices(plan, &options.key_columns);
-    if keys.is_empty() {
-        return Err(anyhow!("按键汇总至少需要一个有效的键字段"));
-    }
-    let operations = aggregate_operations(tables, plan);
-    let mut groups = HashMap::<String, Vec<CellValue>>::new();
-    let total = tables.iter().map(|table| table.estimated_rows).sum();
-    let mut current = 0;
-    for (table_index, table) in tables.iter().enumerate() {
-        for_each_table_row(table, |values| {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(MergeCancelled.into());
-            }
-            let row = mapped_row(values, &row_mappings[table_index], plan);
-            if passes_filter(&row, plan, options) {
-                let key = row_key(&row, &keys);
-                groups
-                    .entry(key)
-                    .and_modify(|existing| {
-                        aggregate_rows(existing, &row, &operations, &options.text_join_separator)
-                    })
-                    .or_insert(row);
-            }
-            current += 1;
-            send_progress(current, total, table.display_name(), emit);
-            Ok(())
-        })?;
-    }
-    if cancel.load(Ordering::Relaxed) {
-        return Ok(None);
-    }
-    let mut rows = groups.into_iter().collect::<Vec<_>>();
-    rows.sort_by(|left, right| left.0.cmp(&right.0));
-    for (_, row) in rows {
-        sink.write_row(&row)?;
-    }
-    Ok(Some(sink.total_rows()))
-}
-
-fn merge_joined<S: RowSink>(
-    tables: &[&SourceTable],
-    row_mappings: &[RowMapping],
-    options: &MergeOptions,
-    plan: &OutputPlan,
-    sink: &mut S,
-    emit: &dyn Fn(u64, u64, String),
-    cancel: &AtomicBool,
-) -> Result<Option<u64>> {
-    let keys = key_indices(plan, &options.key_columns);
-    if keys.is_empty() {
-        return Err(anyhow!("横向关联至少需要一个有效的键字段"));
-    }
-    let mut current_rows = Vec::<Vec<CellValue>>::new();
-    let total = tables.iter().map(|table| table.estimated_rows).sum();
-    let mut progress = 0;
-    for (table_index, table) in tables.iter().enumerate() {
-        let mut incoming = HashMap::<String, Vec<CellValue>>::new();
-        for_each_table_row(table, |values| {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(MergeCancelled.into());
-            }
-            let row = mapped_row(values, &row_mappings[table_index], plan);
-            incoming
-                .entry(row_key(&row, &keys))
-                .and_modify(|existing| fill_empty(existing, &row))
-                .or_insert(row);
-            progress += 1;
-            send_progress(progress, total, table.display_name(), emit);
-            Ok(())
-        })?;
-        if table_index == 0 {
-            current_rows = incoming.into_values().collect();
-            continue;
-        }
-        let mut matched = HashSet::new();
-        current_rows.retain_mut(|row| {
-            let key = row_key(row, &keys);
-            if let Some(other) = incoming.get(&key) {
-                fill_empty(row, other);
-                matched.insert(key);
-                true
-            } else {
-                options.join_kind != JoinKind::Inner
-            }
-        });
-        if options.join_kind == JoinKind::Full {
-            current_rows.extend(
-                incoming
-                    .into_iter()
-                    .filter(|(key, _)| !matched.contains(key))
-                    .map(|(_, row)| row),
-            );
-        }
-    }
-    if cancel.load(Ordering::Relaxed) {
-        return Ok(None);
-    }
-    current_rows.sort_by_key(|row| row_key(row, &keys));
-    for row in current_rows {
-        if passes_filter(&row, plan, options) {
-            sink.write_row(&row)?;
-        }
-    }
-    Ok(Some(sink.total_rows()))
-}
-
-fn for_each_table_row<F>(table: &SourceTable, mut callback: F) -> Result<()>
-where
-    F: FnMut(Vec<CellValue>) -> Result<()>,
-{
-    let mut emit_non_empty = |values: Vec<CellValue>| {
-        if is_blank_source_row(table.kind, &values) {
-            Ok(())
-        } else {
-            callback(values)
-        }
-    };
-    match table.kind {
-        SourceKind::Csv { delimiter } => for_each_csv_row(
-            &table.path,
-            delimiter,
-            table.header_row,
-            table.header_rows,
-            |row| emit_non_empty(row.into_iter().map(CellValue::Text).collect()),
-        ),
-        SourceKind::Workbook => {
-            if is_xlsx_path(&table.path) {
-                let mut workbook: Xlsx<BufReader<File>> = open_workbook(&table.path)?;
-                for_each_xlsx_row(
-                    &mut workbook,
-                    &table.sheet_name,
-                    table.header_row + table.header_rows - 1,
-                    None,
-                    |row| emit_non_empty(row.iter().map(CellValue::from_calamine).collect()),
-                )?;
-                Ok(())
-            } else {
-                let mut workbook = open_workbook_auto(&table.path)?;
-                let range = workbook.worksheet_range(&table.sheet_name)?;
-                for row in range.rows().skip(table.header_row + table.header_rows - 1) {
-                    emit_non_empty(row.iter().map(CellValue::from_calamine).collect())?;
-                }
-                Ok(())
-            }
-        }
-    }
 }
 
 fn is_blank_source_row(kind: SourceKind, values: &[CellValue]) -> bool {
@@ -633,30 +462,22 @@ fn mapped_row(
     output
 }
 
-fn key_indices(plan: &OutputPlan, columns: &[String]) -> Vec<usize> {
-    let requested = columns
-        .iter()
-        .map(|column| header_key(column))
-        .collect::<HashSet<_>>();
-    plan.headers
-        .iter()
-        .enumerate()
-        .filter(|(_, header)| requested.contains(&header_key(header)))
-        .map(|(index, _)| index)
-        .collect()
+pub(crate) fn preview_mapped_row(
+    source: Vec<CellValue>,
+    table: &SourceTable,
+    plan: &OutputPlan,
+    options: &MergeOptions,
+) -> Option<Vec<String>> {
+    if is_blank_source_row(table.kind, &source) {
+        return None;
+    }
+    let mapping = build_row_mapping(table, plan, options.mode);
+    let output = mapped_row(source, &mapping, plan);
+    passes_filter(&output, plan, options).then(|| row_key(&output))
 }
 
-fn row_key(row: &[CellValue], indices: &[usize]) -> String {
-    let selected = if indices.is_empty() {
-        (0..row.len()).collect::<Vec<_>>()
-    } else {
-        indices.to_vec()
-    };
-    selected
-        .into_iter()
-        .map(|index| row.get(index).map(CellValue::as_text).unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join("\u{001f}")
+fn row_key(row: &[CellValue]) -> Vec<String> {
+    row.iter().map(CellValue::as_text).collect()
 }
 
 fn passes_filter(row: &[CellValue], plan: &OutputPlan, options: &MergeOptions) -> bool {
@@ -680,91 +501,6 @@ fn passes_filter(row: &[CellValue], plan: &OutputPlan, options: &MergeOptions) -
         !contains
     } else {
         contains
-    }
-}
-
-fn aggregate_operations(tables: &[&SourceTable], plan: &OutputPlan) -> Vec<AggregateOp> {
-    plan.headers
-        .iter()
-        .map(|header| {
-            tables
-                .iter()
-                .flat_map(|table| &table.mappings)
-                .find(|mapping| header_key(&mapping.target_name) == header_key(header))
-                .map(|mapping| mapping.aggregate)
-                .unwrap_or(AggregateOp::First)
-        })
-        .collect()
-}
-
-fn aggregate_rows(
-    existing: &mut [CellValue],
-    incoming: &[CellValue],
-    operations: &[AggregateOp],
-    separator: &str,
-) {
-    for (index, current) in existing.iter_mut().enumerate() {
-        let other = incoming.get(index).cloned().unwrap_or(CellValue::Empty);
-        match operations.get(index).copied().unwrap_or(AggregateOp::First) {
-            AggregateOp::First => {
-                if current.is_empty() {
-                    *current = other;
-                }
-            }
-            AggregateOp::Sum => {
-                // 整数用 i128 累加避免金额/大数在浮点累加中丢精度；
-                // 结果在 f64 安全范围内输出为数值(Excel 可参与计算)，
-                // 超出 2^53 才降级为文本以保住每一位精度。
-                if let (Ok(current_int), Ok(other_int)) = (
-                    current.as_text().trim().parse::<i128>(),
-                    other.as_text().trim().parse::<i128>(),
-                ) {
-                    let total = current_int + other_int;
-                    // Excel 对超过 15 位的整数会强制科学计数法显示；
-                    // 14 位以内保持数值(可参与计算)，超过则降级为文本保原样，杜绝科学计数法。
-                    if (total as f64).abs() < 1e14 {
-                        *current = CellValue::Number(total as f64);
-                    } else {
-                        *current = CellValue::Text(total.to_string());
-                    }
-                } else {
-                    let sum = current.as_number().unwrap_or(0.0) + other.as_number().unwrap_or(0.0);
-                    *current = CellValue::Number(sum);
-                }
-            }
-            AggregateOp::UniqueJoin => {
-                let mut values = current
-                    .as_text()
-                    .split(separator)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>();
-                let value = other.as_text();
-                if !value.is_empty() && !values.contains(&value) {
-                    values.push(value);
-                }
-                *current = CellValue::Text(values.join(separator));
-            }
-            AggregateOp::TextJoin => {
-                let value = other.as_text();
-                if !value.is_empty() {
-                    let first = current.as_text();
-                    *current = CellValue::Text(if first.is_empty() {
-                        value
-                    } else {
-                        format!("{first}{separator}{value}")
-                    });
-                }
-            }
-        }
-    }
-}
-
-fn fill_empty(existing: &mut [CellValue], incoming: &[CellValue]) {
-    for (current, other) in existing.iter_mut().zip(incoming) {
-        if current.is_empty() && !other.is_empty() {
-            *current = other.clone();
-        }
     }
 }
 
@@ -845,14 +581,6 @@ impl CellValue {
             .map(Cow::into_owned)
             .unwrap_or_default()
     }
-    fn as_number(&self) -> Option<f64> {
-        match self {
-            Self::Integer(v) => Some(*v as f64),
-            Self::Number(v) => Some(*v),
-            Self::Text(v) => v.replace(',', "").parse().ok(),
-            _ => None,
-        }
-    }
     fn transformed(&self, operation: TransformOp) -> Self {
         if operation == TransformOp::None {
             self.clone()
@@ -860,7 +588,7 @@ impl CellValue {
             Self::Text(operation.apply(&self.as_text()))
         }
     }
-    fn from_calamine(value: &Data) -> Self {
+    pub(crate) fn from_calamine(value: &Data) -> Self {
         match value {
             Data::Empty => Self::Empty,
             Data::String(v) => Self::Text(v.clone()),
@@ -891,12 +619,10 @@ impl CellValue {
 
 trait RowSink {
     fn write_row(&mut self, values: &[CellValue]) -> Result<()>;
-    fn total_rows(&self) -> u64;
 }
 
 struct CellCallbackSink<F> {
     write_row: F,
-    total_rows: u64,
 }
 
 impl<F> RowSink for CellCallbackSink<F>
@@ -905,12 +631,7 @@ where
 {
     fn write_row(&mut self, values: &[CellValue]) -> Result<()> {
         (self.write_row)(values)?;
-        self.total_rows += 1;
         Ok(())
-    }
-
-    fn total_rows(&self) -> u64 {
-        self.total_rows
     }
 }
 
@@ -921,7 +642,6 @@ struct XlsxSink {
     current_sheet: usize,
     row_in_sheet: u32,
     max_data_rows: u32,
-    total_rows: u64,
 }
 
 impl XlsxSink {
@@ -945,7 +665,6 @@ impl XlsxSink {
             current_sheet: 0,
             row_in_sheet: 0,
             max_data_rows,
-            total_rows: 0,
         };
         sink.add_sheet()?;
         Ok(sink)
@@ -1018,7 +737,6 @@ impl XlsxSink {
             }
         }
         self.row_in_sheet += 1;
-        self.total_rows += 1;
         Ok(())
     }
     fn sheet_count(&self) -> usize {
@@ -1034,10 +752,6 @@ impl XlsxSink {
 impl RowSink for XlsxSink {
     fn write_row(&mut self, values: &[CellValue]) -> Result<()> {
         XlsxSink::write_row(self, values)
-    }
-
-    fn total_rows(&self) -> u64 {
-        self.total_rows
     }
 }
 
@@ -1104,7 +818,6 @@ mod tests {
             target_name: "复制值".to_owned(),
             enabled: true,
             transform: TransformOp::None,
-            aggregate: AggregateOp::First,
         });
         let table = SourceTable {
             path: PathBuf::from("customers.csv"),

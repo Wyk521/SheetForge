@@ -1,10 +1,8 @@
 // 与 Rust 侧 serde 序列化对应的类型（字段名保持 snake_case）
 
-export type MergeMode = "Union" | "Intersection" | "Manual" | "Consolidate" | "Join";
+export type MergeMode = "Manual" | "Intersection";
 export type SourceKind = { Csv: { delimiter: number } } | "Workbook";
 export type TransformOp = "None" | "Trim" | "Uppercase" | "Lowercase";
-export type AggregateOp = "First" | "Sum" | "UniqueJoin" | "TextJoin";
-export type JoinKind = "Left" | "Inner" | "Full";
 export type IssueLevel = "Info" | "Warning" | "Error";
 export type OutputDestination = "xlsx" | "postgres";
 export type IfExistsMode = "abort" | "append" | "truncate" | "replace";
@@ -17,7 +15,6 @@ export interface ColumnMapping {
   target_name: string;
   enabled: boolean;
   transform: TransformOp;
-  aggregate: AggregateOp;
 }
 
 export interface SourceTable {
@@ -39,9 +36,6 @@ export interface MergeOptions {
   include_source_sheet: boolean;
   output_order: string[];
   deduplicate: boolean;
-  key_columns: string[];
-  join_kind: JoinKind;
-  text_join_separator: string;
   filter_column: string;
   filter_text: string;
   filter_exclude: boolean;
@@ -177,14 +171,11 @@ export interface DatabaseImportFinished {
 }
 
 export const defaultOptions = (): MergeOptions => ({
-  mode: "Union",
+  mode: "Manual",
   include_source_file: false,
   include_source_sheet: false,
   output_order: [],
   deduplicate: false,
-  key_columns: [],
-  join_kind: "Left",
-  text_join_separator: "；",
   filter_column: "",
   filter_text: "",
   filter_exclude: false,

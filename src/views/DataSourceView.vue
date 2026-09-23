@@ -74,6 +74,7 @@ async function previewSource(index: number) {
           placeholder="最近文件夹…"
           class="sf-recent-select"
           clearable
+          :disabled="store.busy"
           @change="onRecentFolder"
         >
           <el-option v-for="folder in recentFolders" :key="folder" :label="folder" :value="folder" />
@@ -83,6 +84,7 @@ async function previewSource(index: number) {
           placeholder="最近方案…"
           class="sf-recent-select"
           clearable
+          :disabled="store.busy"
           @change="onRecentScheme"
         >
           <el-option v-for="scheme in recentSchemes" :key="scheme" :label="scheme" :value="scheme" />

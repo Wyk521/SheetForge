@@ -9,7 +9,6 @@ import {
   defaultDatabaseImportOptions,
   defaultOptions,
   type AppSettings,
-  type AggregateOp,
   type CheckIssue,
   type ColumnMapping,
   type ConnectionInfo,
@@ -37,11 +36,8 @@ import {
 export type AppPhase = "ready" | "scanning" | "checking" | "merging";
 
 const MODE_LABELS: Record<string, string> = {
-  Union: "列名并集",
+  Manual: "修正表头",
   Intersection: "列名交集",
-  Manual: "手动映射",
-  Consolidate: "按键汇总",
-  Join: "横向关联",
 };
 
 /** 字段映射工作区中的一组同名字段（按原始来源表头分组） */
@@ -57,7 +53,6 @@ export interface FieldGroup {
   uniformTarget: string | null;
   uniformEnabled: boolean | null;
   uniformTransform: TransformOp | null;
-  uniformAggregate: AggregateOp | null;
 }
 
 // 与 Rust 端 header_key 保持一致：换行只是 Excel 单元格的显示换行，
@@ -162,7 +157,6 @@ export const useMergeStore = defineStore("merge", () => {
         targets: Map<string, string>;
         enables: Set<boolean>;
         transforms: Set<TransformOp>;
-        aggregates: Set<AggregateOp>;
       }
     >();
     for (const [index, table] of sources.value.entries()) {
@@ -177,7 +171,6 @@ export const useMergeStore = defineStore("merge", () => {
             targets: new Map(),
             enables: new Set(),
             transforms: new Set(),
-            aggregates: new Set(),
           };
           byKey.set(key, group);
         }
@@ -186,7 +179,6 @@ export const useMergeStore = defineStore("merge", () => {
         group.targets.set(headerKey(target), target);
         group.enables.add(mapping.enabled);
         group.transforms.add(mapping.transform);
-        group.aggregates.add(mapping.aggregate);
       }
     }
     const outputPositions = new Map(
@@ -212,7 +204,6 @@ export const useMergeStore = defineStore("merge", () => {
         uniformTarget: g.targets.size === 1 ? [...g.targets.values()][0] : null,
         uniformEnabled: g.enables.size === 1 ? [...g.enables][0] : null,
         uniformTransform: g.transforms.size === 1 ? [...g.transforms][0] : null,
-        uniformAggregate: g.aggregates.size === 1 ? [...g.aggregates][0] : null,
       }));
   });
 
@@ -344,6 +335,7 @@ export const useMergeStore = defineStore("merge", () => {
   }
 
   async function scanFolder(path: string) {
+    if (busy.value) return;
     scanAppend.value = sources.value.length > 0;
     if (!outputPath.value.trim()) {
       outputPath.value = `${path.replace(/[\\/]$/, "")}\\合并结果.xlsx`;
@@ -595,20 +587,12 @@ export const useMergeStore = defineStore("merge", () => {
     void refreshPlan();
   }
 
-  function setFieldAggregate(key: string, aggregate: AggregateOp) {
-    forEachFieldMapping(key, (mapping) => {
-      mapping.aggregate = aggregate;
-    });
-    void refreshPlan();
-  }
-
   function resetField(key: string) {
     forEachFieldMapping(key, (mapping) => replaceOutputOrderName(mapping.target_name, mapping.source_name));
     forEachFieldMapping(key, (mapping) => {
       mapping.target_name = mapping.source_name;
       mapping.enabled = true;
       mapping.transform = "None";
-      mapping.aggregate = "First";
     });
     void refreshPlan();
   }
@@ -753,6 +737,7 @@ export const useMergeStore = defineStore("merge", () => {
   }
 
   async function openScheme() {
+    if (busy.value) return;
     const path = await open({
       title: "打开合并方案",
       multiple: false,
@@ -763,6 +748,9 @@ export const useMergeStore = defineStore("merge", () => {
   }
 
   async function openSchemeByPath(path: string) {
+    if (busy.value) return;
+    phase.value = "scanning";
+    progressLabel.value = "正在重新读取方案中的数据源…";
     try {
       const scheme = await invoke<MergeScheme>("open_scheme", { path });
       sources.value = scheme.tables;
@@ -776,6 +764,8 @@ export const useMergeStore = defineStore("merge", () => {
       await refreshPlan();
     } catch (error) {
       ElMessage.error(`打开方案失败：${error}`);
+    } finally {
+      phase.value = "ready";
     }
   }
 
@@ -967,7 +957,7 @@ export const useMergeStore = defineStore("merge", () => {
     toggleSourceEnabled, selectAll, toggleGroup, setGroupEnabled, removeGroup, removeSource,
     applyGroupHeader, reloadTable,
     setMode, setAdvanced, moveOutputColumn, moveOutputColumnByName,
-    setFieldTarget, setFieldEnabled, setFieldTransform, setFieldAggregate, resetField,
+    setFieldTarget, setFieldEnabled, setFieldTransform, resetField,
     showSourcePreview, closeSourcePreview, showMergedPreview, runPreflight, startMerge, cancelMerge,
     loadDatabaseProfiles, saveDatabaseProfile, deleteDatabaseProfile, testDatabaseConnection,
     newDatabaseProfile, openDatabaseTarget, openDatabaseConnections,
