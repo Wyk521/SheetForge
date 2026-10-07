@@ -297,12 +297,31 @@ pub fn preflight_for_destination(
             ));
         }
         if let SourceKind::Csv { delimiter } = table.kind {
-            if let Err(error) = validate_csv(&table.path, delimiter, 10_000) {
-                issues.push(issue(
+            match validate_csv(
+                &table.path,
+                delimiter,
+                table.header_row + table.header_rows - 1,
+                table.headers.len(),
+                10_000,
+            ) {
+                Ok(check) => {
+                    if let Some(line) = check.first_wider_line {
+                        issues.push(issue(
+                            IssueLevel::Warning,
+                            "CSV 数据列多于表头",
+                            &format!(
+                                "{}：{} 行数据的非空列超出表头（首次出现在第 {line} 行），超出部分不会输出。",
+                                table.display_name(),
+                                check.wider_rows
+                            ),
+                        ));
+                    }
+                }
+                Err(error) => issues.push(issue(
                     IssueLevel::Error,
                     "CSV 行格式异常",
                     &format!("{}：{error:#}", table.display_name()),
-                ));
+                )),
             }
         }
     }
@@ -418,31 +437,51 @@ pub fn preflight_for_destination(
     issues
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CsvCheck {
+    pub rows: usize,
+    pub wider_rows: usize,
+    pub first_wider_line: Option<usize>,
+}
+
+/// 按实际读取方式校验 CSV：跳过表头及其上方的标题行，与扫描和合并一样
+/// 允许行宽不一致；只有数据行在表头之外仍有非空值时才会丢数据，需要提醒。
 pub fn validate_csv(
     path: &std::path::Path,
     delimiter: u8,
+    skipped_rows: usize,
+    header_width: usize,
     max_rows: usize,
-) -> Result<(usize, usize)> {
+) -> Result<CsvCheck> {
     let mut reader = ReaderBuilder::new()
         .has_headers(false)
-        .flexible(false)
+        .flexible(true)
         .delimiter(delimiter)
         .from_path(path)?;
     let mut record = ByteRecord::new();
-    let mut rows = 0;
-    let mut width = 0;
-    while rows < max_rows
+    let mut line = 0;
+    let mut check = CsvCheck::default();
+    while check.rows < max_rows
         && reader
             .read_byte_record(&mut record)
-            .with_context(|| format!("第 {} 行格式异常", rows + 1))?
+            .with_context(|| format!("第 {} 行格式异常", line + 1))?
     {
-        width = width.max(record.len());
-        rows += 1;
-        for field in &record {
-            let _ = decode_csv_field(field);
+        line += 1;
+        if line <= skipped_rows {
+            continue;
+        }
+        check.rows += 1;
+        let mut wider = false;
+        for (index, field) in record.iter().enumerate() {
+            let value = decode_csv_field(field);
+            wider |= index >= header_width && !value.trim().is_empty();
+        }
+        if wider {
+            check.wider_rows += 1;
+            check.first_wider_line.get_or_insert(line);
         }
     }
-    Ok((rows, width))
+    Ok(check)
 }
 
 fn issue(level: IssueLevel, title: &str, detail: &str) -> CheckIssue {

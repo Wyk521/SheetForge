@@ -592,3 +592,165 @@ fn merged_preview_applies_transforms_filter_and_deduplication() {
     assert_eq!(preview.groups[0].rows, vec![vec!["A"]]);
     assert_eq!(output[1..], preview.groups[0].rows);
 }
+
+/// 执行合并并读回原始单元格，用于断言单元格类型。
+fn merge_and_read_cells(tables: Vec<SourceTable>, options: MergeOptions) -> Vec<Vec<Data>> {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("合并结果.xlsx");
+    let cancel = AtomicBool::new(false);
+    merge_tables(&tables, &options, &output, &|_, _, _| {}, &cancel)
+        .unwrap()
+        .expect("合并应成功");
+    let mut workbook = open_workbook_auto(&output).unwrap();
+    let range = workbook.worksheet_range("合并结果_001").unwrap();
+    range.rows().map(<[Data]>::to_vec).collect()
+}
+
+#[test]
+fn csv_title_row_above_header_passes_preflight() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(
+        &dir,
+        "title.csv",
+        "2026年销售报表\n姓名,金额,城市\n张三,12,北京\n李四,15\n",
+    );
+    assert_eq!(table.header_row, 2);
+    let issues = preflight_for_destination(&[table], &MergeOptions::default(), false);
+    assert!(
+        !issues
+            .iter()
+            .any(|issue| matches!(issue.level, crate::inspect::IssueLevel::Error)),
+        "标题行和省略的末尾空字段不应阻止合并: {issues:?}"
+    );
+}
+
+#[test]
+fn csv_rows_wider_than_header_are_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(
+        &dir,
+        "wide.csv",
+        "姓名,金额\n张三,12\n李四,15,\n王五,18\n赵六,20,多余\n",
+    );
+    assert_eq!(table.headers, vec!["姓名", "金额"]);
+    let issues = preflight_for_destination(&[table], &MergeOptions::default(), false);
+    let warning = issues
+        .iter()
+        .find(|issue| issue.title == "CSV 数据列多于表头")
+        .expect("超出表头的非空数据应提醒");
+    assert!(warning.detail.contains("1 行"), "{}", warning.detail);
+    assert!(warning.detail.contains("第 5 行"), "{}", warning.detail);
+}
+
+#[test]
+fn transforms_keep_numbers_and_dates_typed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("typed.xlsx");
+    let mut workbook = Workbook::new();
+    let worksheet = workbook.add_worksheet();
+    worksheet.write_string(0, 0, "金额").unwrap();
+    worksheet.write_string(0, 1, "日期").unwrap();
+    worksheet.write_string(0, 2, "名称").unwrap();
+    worksheet.write_number(1, 0, 12.5).unwrap();
+    let date = ExcelDateTime::from_ymd(2024, 1, 15).unwrap();
+    worksheet
+        .write_datetime_with_format(1, 1, &date, &Format::new().set_num_format("yyyy-mm-dd"))
+        .unwrap();
+    worksheet.write_string(1, 2, " ab ").unwrap();
+    workbook.save(&path).unwrap();
+
+    let mut table = scan_workbook_sheet(&path, "Sheet1");
+    table.mappings[0].transform = TransformOp::Trim;
+    table.mappings[1].transform = TransformOp::Uppercase;
+    table.mappings[2].transform = TransformOp::Uppercase;
+    let rows = merge_and_read_cells(vec![table], MergeOptions::default());
+    assert_eq!(rows[1][0], Data::Float(12.5));
+    assert!(matches!(rows[1][1], Data::DateTime(_)), "{:?}", rows[1][1]);
+    assert_eq!(rows[1][2], Data::String("AB".to_owned()));
+}
+
+#[test]
+fn intersection_mode_ignores_field_transforms() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = scan_csv(&dir, "a.csv", "name,city\nalice,paris\n");
+    let b = scan_csv(&dir, "b.csv", "name,city\nbob,rome\n");
+    a.mappings[0].transform = TransformOp::Uppercase;
+    let options = MergeOptions {
+        mode: MergeMode::Intersection,
+        ..Default::default()
+    };
+    let preview = preview_merged(&[a.clone(), b.clone()], &options, 5).unwrap();
+    let rows = merge_and_read(vec![a, b], options);
+    assert_eq!(rows[1], vec!["alice", "paris"]);
+    assert_eq!(preview.groups[0].rows, vec![vec!["alice", "paris"]]);
+}
+
+#[test]
+fn overlong_text_is_truncated_and_counted() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "中".repeat(40_000);
+    let table = scan_csv(&dir, "long.csv", &format!("id,note\n1,{long}\n2,短\n"));
+    let output = dir.path().join("out.xlsx");
+    let summary = merge_tables(
+        &[table],
+        &MergeOptions::default(),
+        &output,
+        &|_, _, _| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(summary.rows, 2);
+    assert_eq!(summary.truncated_cells, 1);
+    let mut workbook = open_workbook_auto(&output).unwrap();
+    let range = workbook.worksheet_range("合并结果_001").unwrap();
+    match range.get_value((1, 1)) {
+        Some(Data::String(value)) => assert_eq!(value.chars().count(), 32_767),
+        other => panic!("超长文本应截断写出，得到 {other:?}"),
+    }
+}
+
+#[test]
+fn time_only_cells_stay_times() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("time.xlsx");
+    let mut workbook = Workbook::new();
+    let worksheet = workbook.add_worksheet();
+    worksheet.write_string(0, 0, "打卡时间").unwrap();
+    let time = ExcelDateTime::from_hms(8, 30, 0).unwrap();
+    worksheet
+        .write_datetime_with_format(1, 0, &time, &Format::new().set_num_format("hh:mm"))
+        .unwrap();
+    workbook.save(&path).unwrap();
+    let table = scan_workbook_sheet(&path, "Sheet1");
+
+    let preview =
+        preview_merged(std::slice::from_ref(&table), &MergeOptions::default(), 5).unwrap();
+    assert_eq!(preview.groups[0].rows, vec![vec!["08:30:00"]]);
+    let rows = merge_and_read_cells(vec![table], MergeOptions::default());
+    match &rows[1][0] {
+        Data::DateTime(value) => {
+            assert!((value.as_f64() - 8.5 / 24.0).abs() < 1e-9, "{value:?}")
+        }
+        other => panic!("时间应保持 DateTime 类型，得到 {other:?}"),
+    }
+}
+
+#[test]
+fn cancelled_row_stream_is_recognised_as_cancellation() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(&dir, "c.csv", "id\n1\n2\n3\n");
+    let cancel = AtomicBool::new(false);
+    let error = crate::merge::stream_merged_cells(
+        &[table],
+        &MergeOptions::default(),
+        &|_, _, _| {},
+        &cancel,
+        |_| {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert!(crate::merge::is_cancelled(&error), "{error:#}");
+}

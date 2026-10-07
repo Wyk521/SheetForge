@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, reactive } from "vue";
+import { ElMessage } from "element-plus";
 import { headerKey, useMergeStore } from "../stores/merge";
 import type { TransformOp } from "../types";
 
@@ -15,6 +16,20 @@ const TRANSFORMS: { value: TransformOp; label: string }[] = [
   { value: "Uppercase", label: "转大写" },
   { value: "Lowercase", label: "转小写" },
 ];
+
+// 输入过程中只更新草稿，失焦或回车时再提交，避免逐键 trim 吃掉空格、
+// 中间值打乱输出顺序。
+const targetDrafts = reactive<Record<string, string>>({});
+
+function commitTarget(key: string, value: string) {
+  delete targetDrafts[key];
+  const target = value.trim();
+  if (!target) {
+    ElMessage.warning("目标字段不能为空；如需排除该字段，请关闭「启用」");
+    return;
+  }
+  store.setFieldTarget(key, target);
+}
 
 const filteredGroups = computed(() => {
   const search = store.mappingSearch.trim().toLowerCase();
@@ -110,10 +125,11 @@ const filteredGroups = computed(() => {
       <el-table-column label="目标字段" min-width="160">
         <template #default="{ row }">
           <el-input
-            :model-value="row.uniformTarget ?? ''"
+            :model-value="targetDrafts[row.key] ?? row.uniformTarget ?? ''"
             size="small"
             placeholder="多个值"
-            @update:model-value="(v: string) => store.setFieldTarget(row.key, v)"
+            @update:model-value="(v: string) => (targetDrafts[row.key] = v)"
+            @change="(v: string) => commitTarget(row.key, v)"
           />
         </template>
       </el-table-column>

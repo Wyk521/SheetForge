@@ -107,3 +107,22 @@ test("导航和输出预览不再使用第一二三步文案", async () => {
   assert.match(preview, /结果预览/);
   assert.match(preview, /检查报告/);
 });
+
+test("目标字段在失焦或回车时才提交，不逐键改写映射", async () => {
+  const fieldBatch = await read("src/components/FieldBatchView.vue");
+
+  assert.match(fieldBatch, /@change="\(v: string\) => commitTarget\(row\.key, v\)"/);
+  assert.doesNotMatch(fieldBatch, /@update:model-value="\(v: string\) => store\.setFieldTarget/);
+});
+
+test("统一表头的单表失败随批量结果返回，不提前解除忙碌", async () => {
+  const [scan, store] = await Promise.all([
+    read("src-tauri/src/scan.rs"),
+    read("src/stores/merge.ts"),
+  ]);
+  const groupReload = scan.slice(scan.indexOf("pub fn spawn_group_reload"), scan.indexOf("fn preserve_mappings"));
+
+  assert.doesNotMatch(groupReload, /table-reload-failed/);
+  assert.match(groupReload, /failures\.push/);
+  assert.match(store, /replaceReloadedTable\(item\.index, item\.table\)/);
+});

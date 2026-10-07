@@ -32,6 +32,7 @@ pub struct MergeFinishedDto {
     pub output: PathBuf,
     pub rows: u64,
     pub sheets: usize,
+    pub truncated_cells: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -57,6 +58,11 @@ impl std::fmt::Display for MergeCancelled {
 
 impl std::error::Error for MergeCancelled {}
 
+/// 判断错误链是否来自用户取消，供 XLSX 与数据库两条导出路径共用。
+pub(crate) fn is_cancelled(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<MergeCancelled>().is_some()
+}
+
 pub fn spawn_merge(
     tables: Vec<SourceTable>,
     options: MergeOptions,
@@ -76,13 +82,14 @@ pub fn spawn_merge(
             );
         };
         match merge_tables(&tables, &options, &output, &emit_progress, &cancel) {
-            Ok(Some((rows, sheets))) => {
+            Ok(Some(summary)) => {
                 let _ = app.emit(
                     "merge-finished",
                     MergeFinishedDto {
                         output,
-                        rows,
-                        sheets,
+                        rows: summary.rows,
+                        sheets: summary.sheets,
+                        truncated_cells: summary.truncated_cells,
                     },
                 );
             }
@@ -90,7 +97,7 @@ pub fn spawn_merge(
                 let _ = app.emit("merge-cancelled", ());
             }
             Err(error) => {
-                if error.downcast_ref::<MergeCancelled>().is_some() {
+                if is_cancelled(&error) {
                     let _ = app.emit("merge-cancelled", ());
                 } else {
                     let _ = app.emit(
@@ -125,13 +132,21 @@ pub fn spawn_preflight(
     });
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MergeSummary {
+    pub rows: u64,
+    pub sheets: usize,
+    /// 超过 XLSX 单元格 32,767 字符上限而被截断的单元格数。
+    pub truncated_cells: u64,
+}
+
 pub(crate) fn merge_tables(
     tables: &[SourceTable],
     options: &MergeOptions,
     output: &Path,
     emit: &dyn Fn(u64, u64, String),
     cancel: &AtomicBool,
-) -> Result<Option<(u64, usize)>> {
+) -> Result<Option<MergeSummary>> {
     let enabled = tables
         .iter()
         .filter(|table| table.enabled)
@@ -399,8 +414,13 @@ fn build_row_mapping(table: &SourceTable, plan: &OutputPlan, mode: MergeMode) ->
     }
 
     // 与 mapped_row 之前的 find 语义保持一致：重复 source_index 时取第一条规则。
+    // 列名交集直接使用原始表头和原值，不应用「修正表头」中设置的清洗。
     let mut transforms = vec![None; table.headers.len()];
-    for mapping in &table.mappings {
+    let mappings = match mode {
+        MergeMode::Manual => table.mappings.as_slice(),
+        MergeMode::Intersection => &[],
+    };
+    for mapping in mappings {
         if let Some(transform) = transforms.get_mut(mapping.source_index) {
             if transform.is_none() {
                 *transform = Some(mapping.transform);
@@ -515,13 +535,17 @@ fn finish_sink(
     output: &Path,
     rows: u64,
     cancel: &AtomicBool,
-) -> Result<Option<(u64, usize)>> {
+) -> Result<Option<MergeSummary>> {
     if cancel.load(Ordering::Relaxed) {
         return Ok(None);
     }
-    let sheets = sink.sheet_count();
+    let summary = MergeSummary {
+        rows,
+        sheets: sink.sheet_count(),
+        truncated_cells: sink.truncated_cells,
+    };
     sink.save(output)?;
-    Ok(Some((rows, sheets)))
+    Ok(Some(summary))
 }
 
 #[derive(Clone, Debug)]
@@ -536,6 +560,12 @@ pub(crate) enum CellValue {
         year: u16,
         month: u8,
         day: u8,
+        hour: u8,
+        minute: u8,
+        second: u8,
+    },
+    /// 仅含时间的单元格（Excel 序列值小于 1），如 08:30。
+    Time {
         hour: u8,
         minute: u8,
         second: u8,
@@ -574,6 +604,11 @@ impl CellValue {
             } => Some(Cow::Owned(format!(
                 "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"
             ))),
+            Self::Time {
+                hour,
+                minute,
+                second,
+            } => Some(Cow::Owned(format!("{hour:02}:{minute:02}:{second:02}"))),
         }
     }
     fn as_text(&self) -> String {
@@ -582,10 +617,13 @@ impl CellValue {
             .unwrap_or_default()
     }
     fn transformed(&self, operation: TransformOp) -> Self {
-        if operation == TransformOp::None {
-            self.clone()
-        } else {
-            Self::Text(operation.apply(&self.as_text()))
+        // 去空格和大小写只对文本有意义；数字、布尔、日期保持原类型，
+        // 否则 XLSX 中会变成“以文本形式存储的数字”。
+        match self {
+            Self::Text(value) if operation != TransformOp::None => {
+                Self::Text(operation.apply(value))
+            }
+            other => other.clone(),
         }
     }
     pub(crate) fn from_calamine(value: &Data) -> Self {
@@ -601,6 +639,13 @@ impl CellValue {
                     Self::Text(v.as_f64().to_string())
                 } else {
                     let (year, month, day, hour, minute, second, _millis) = v.to_ymd_hms_milli();
+                    if (0.0..1.0).contains(&v.as_f64()) {
+                        return Self::Time {
+                            hour,
+                            minute,
+                            second,
+                        };
+                    }
                     Self::DateTime {
                         year,
                         month,
@@ -642,7 +687,11 @@ struct XlsxSink {
     current_sheet: usize,
     row_in_sheet: u32,
     max_data_rows: u32,
+    truncated_cells: u64,
 }
+
+/// Excel 单元格最多容纳 32,767 个字符。
+const XLSX_MAX_CELL_CHARS: usize = 32_767;
 
 impl XlsxSink {
     fn new(plan: OutputPlan) -> Result<Self> {
@@ -665,6 +714,7 @@ impl XlsxSink {
             current_sheet: 0,
             row_in_sheet: 0,
             max_data_rows,
+            truncated_cells: 0,
         };
         sink.add_sheet()?;
         Ok(sink)
@@ -692,7 +742,16 @@ impl XlsxSink {
             match value {
                 CellValue::Empty => {}
                 CellValue::Text(v) => {
-                    worksheet.write_string(excel_row, column as u16, v)?;
+                    // 超长文本按 Excel 上限截断并计数，而不是让整次合并在末尾失败。
+                    match v.char_indices().nth(XLSX_MAX_CELL_CHARS) {
+                        Some((end, _)) => {
+                            worksheet.write_string(excel_row, column as u16, &v[..end])?;
+                            self.truncated_cells += 1;
+                        }
+                        None => {
+                            worksheet.write_string(excel_row, column as u16, v)?;
+                        }
+                    }
                 }
                 CellValue::Integer(v) => {
                     // f64 只能精确表示 2^53 以内的整数；超出的整数值（如 18 位
@@ -732,6 +791,19 @@ impl XlsxSink {
                         column as u16,
                         &datetime,
                         &format,
+                    )?;
+                }
+                CellValue::Time {
+                    hour,
+                    minute,
+                    second,
+                } => {
+                    let time = ExcelDateTime::from_hms(*hour as u16, *minute, *second)?;
+                    worksheet.write_datetime_with_format(
+                        excel_row,
+                        column as u16,
+                        &time,
+                        &Format::new().set_num_format("hh:mm:ss"),
                     )?;
                 }
             }

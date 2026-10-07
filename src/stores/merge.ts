@@ -240,6 +240,16 @@ export const useMergeStore = defineStore("merge", () => {
     }
   }
 
+  /** 按文件路径和 Sheet 名回写刷新结果；下标只作为快速路径。 */
+  function replaceReloadedTable(index: number, table: SourceTable) {
+    const sameTable = (candidate: SourceTable | undefined) =>
+      candidate?.path === table.path && candidate.sheet_name === table.sheet_name;
+    const target = sameTable(sources.value[index])
+      ? index
+      : sources.value.findIndex((candidate) => sameTable(candidate));
+    if (target >= 0) sources.value[target] = table;
+  }
+
   function displayName(table: SourceTable): string {
     const file = table.path.split(/[\\/]/).pop() ?? "";
     return `${file}  /  ${table.sheet_name}`;
@@ -564,6 +574,7 @@ export const useMergeStore = defineStore("merge", () => {
   }
 
   function setFieldTarget(key: string, target: string) {
+    if (!target.trim()) return;
     const previousTargets = new Set<string>();
     forEachFieldMapping(key, (mapping) => previousTargets.add(mapping.target_name));
     for (const previous of previousTargets) replaceOutputOrderName(previous, target);
@@ -813,7 +824,7 @@ export const useMergeStore = defineStore("merge", () => {
         ElMessage.error(e.payload.message);
       }),
       await listen<TableReloaded>("table-reloaded", (e) => {
-        if (sources.value[e.payload.index]) sources.value[e.payload.index] = e.payload.table;
+        replaceReloadedTable(e.payload.index, e.payload.table);
         clearMergedPreview();
         closeSourcePreview();
         checkIssues.value = [];
@@ -824,19 +835,21 @@ export const useMergeStore = defineStore("merge", () => {
       }),
       await listen<TablesReloaded>("tables-reloaded", (e) => {
         for (const item of e.payload.tables) {
-          if (sources.value[item.index]) sources.value[item.index] = item.table;
+          replaceReloadedTable(item.index, item.table);
         }
         clearMergedPreview();
         closeSourcePreview();
         checkIssues.value = [];
         checkRan.value = false;
         phase.value = "ready";
-        const failed = e.payload.failures ?? 0;
+        const failures = e.payload.failures ?? [];
         progressLabel.value =
-          failed > 0
-            ? `已刷新 ${e.payload.tables.length} 个数据表，${failed} 个失败`
+          failures.length > 0
+            ? `已刷新 ${e.payload.tables.length} 个数据表，${failures.length} 个失败`
             : `已统一刷新 ${e.payload.tables.length} 个数据表的表头`;
-        if (failed > 0) ElMessage.warning(`${failed} 个数据表刷新失败，其余已应用`);
+        if (failures.length > 0) {
+          ElMessage.warning(`${failures.length} 个数据表刷新失败，其余已应用：${failures[0]}`);
+        }
         void refreshPlan();
       }),
       await listen<{ index: number; message: string }>("table-reload-failed", (e) => {
@@ -852,6 +865,11 @@ export const useMergeStore = defineStore("merge", () => {
         progress.value = 1;
         progressLabel.value = "合并完成";
         ElMessage.success(`合并完成：${formatNumber(e.payload.rows)} 行，${e.payload.sheets} 个 Sheet`);
+        if (e.payload.truncated_cells > 0) {
+          ElMessage.warning(
+            `${formatNumber(e.payload.truncated_cells)} 个单元格超过 Excel 的 32,767 字符上限，已截断`
+          );
+        }
         void revealOutput(e.payload.output);
       }),
       await listen<DatabaseImportFinished>("database-import-finished", (e) => {

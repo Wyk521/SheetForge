@@ -98,7 +98,7 @@ export interface TableReloaded {
 
 export interface TablesReloaded {
   tables: TableReloaded[];
-  failures: number;
+  failures: string[];
 }
 
 export interface MergeProgress {
@@ -111,6 +111,7 @@ export interface MergeFinished {
   output: string;
   rows: number;
   sheets: number;
+  truncated_cells: number;
 }
 
 export interface PreflightDone {

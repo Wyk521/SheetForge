@@ -49,7 +49,7 @@ pub struct TableReloadFailedDto {
 #[derive(Clone, Serialize)]
 pub struct TablesReloadedDto {
     pub tables: Vec<TableReloadedDto>,
-    pub failures: usize,
+    pub failures: Vec<String>,
 }
 
 pub fn supported_file(path: &Path) -> bool {
@@ -388,7 +388,7 @@ pub fn spawn_group_reload(
 ) {
     std::thread::spawn(move || {
         let mut tables = Vec::with_capacity(sources.len());
-        let mut failures = 0;
+        let mut failures = Vec::new();
         for (index, source) in sources {
             let result = match source.kind {
                 SourceKind::Csv { delimiter } => scan_csv(
@@ -415,14 +415,9 @@ pub fn spawn_group_reload(
                 Err(error) => {
                     // 单表失败不影响其他表：记录失败并继续，最后统一提交成功部分，
                     // 避免「统一表头」时一个坏 Sheet 导致整批刷新结果丢失。
-                    failures += 1;
-                    let _ = app.emit(
-                        "table-reload-failed",
-                        TableReloadFailedDto {
-                            index,
-                            message: format!("{}：{error:#}", source.display_name()),
-                        },
-                    );
+                    // 失败随最终事件一起返回，不能单独发事件，否则前端会在
+                    // 其余 Sheet 仍在刷新时提前解除忙碌。
+                    failures.push(format!("{}：{error:#}", source.display_name()));
                 }
             }
         }

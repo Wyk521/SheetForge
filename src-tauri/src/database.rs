@@ -1,4 +1,4 @@
-use crate::merge::{stream_merged_cells, MergeFailedDto, MergeProgressDto};
+use crate::merge::{is_cancelled, stream_merged_cells, MergeFailedDto, MergeProgressDto};
 use crate::model::{build_output_plan, MergeOptions, SourceTable};
 use crate::pg_import::{
     config::{self as pg_config, AppConfig, ConnectionProfile},
@@ -226,6 +226,9 @@ pub fn spawn_database_import(
             Ok(None) => {
                 let _ = app.emit("merge-cancelled", ());
             }
+            Err(error) if is_cancelled(&error) => {
+                let _ = app.emit("merge-cancelled", ());
+            }
             Err(error) => {
                 let _ = app.emit(
                     "merge-failed",
@@ -412,6 +415,12 @@ async fn import_database(
         }
     }
 
+    // 生产线程因取消而提前结束时通道会直接关闭，循环内的取消检查不会执行；
+    // 这里统一按取消处理，事务随 client 释放而回滚。
+    if cancel.load(Ordering::Relaxed) {
+        let _ = producer.await;
+        return Ok(None);
+    }
     let produced = producer
         .await
         .map_err(|error| anyhow!("表格处理线程异常：{error}"))??;
