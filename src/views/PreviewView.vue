@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -8,6 +8,9 @@ import MergedPreviewGrid from "../components/MergedPreviewGrid.vue";
 
 const store = useMergeStore();
 const subTab = ref(0); // 0 合并结果预览 / 1 检查报告
+const previewGridHost = ref<HTMLElement | null>(null);
+const previewMaxHeight = ref<number>();
+let contentResizeObserver: ResizeObserver | undefined;
 
 const errorCount = computed(() => store.checkIssues.filter((i) => i.level === "Error").length);
 const warnCount = computed(() => store.checkIssues.filter((i) => i.level === "Warning").length);
@@ -36,6 +39,49 @@ function onSubTabChange(index: number) {
   if (index === 1) void store.runPreflight(false);
 }
 
+function updatePreviewHeight() {
+  const host = previewGridHost.value;
+  const content = host?.closest(".app-content") as HTMLElement | null;
+  const page = host?.closest(".sf-page") as HTMLElement | null;
+  if (!host || !content || !page || !host.offsetParent) return;
+
+  const contentBottom = content.getBoundingClientRect().bottom;
+  const gridTop = host.getBoundingClientRect().top;
+  const pageBottomPadding = Number.parseFloat(getComputedStyle(page).paddingBottom) || 0;
+  const availableHeight = Math.floor(contentBottom - gridTop - pageBottomPadding);
+  if (availableHeight > 0) previewMaxHeight.value = Math.max(240, availableHeight);
+}
+
+function schedulePreviewHeight() {
+  void nextTick(updatePreviewHeight);
+}
+
+watch(
+  () => [
+    store.activePage,
+    subTab.value,
+    store.preview?.groups.length ?? 0,
+    store.preview?.headers.length ?? 0,
+  ],
+  schedulePreviewHeight,
+  { flush: "post" },
+);
+
+onMounted(() => {
+  window.addEventListener("resize", schedulePreviewHeight);
+  const content = previewGridHost.value?.closest(".app-content");
+  if (content) {
+    contentResizeObserver = new ResizeObserver(schedulePreviewHeight);
+    contentResizeObserver.observe(content);
+  }
+  schedulePreviewHeight();
+});
+
+onUnmounted(() => {
+  window.removeEventListener("resize", schedulePreviewHeight);
+  contentResizeObserver?.disconnect();
+});
+
 async function exportReport() {
   const text = store.checkIssues
     .map((issue) => `[${issue.level}] ${issue.title}\n${issue.detail}`)
@@ -61,9 +107,8 @@ async function exportReport() {
       <div class="sf-page-heading-copy">
         <p class="sf-page-code"><span>03</span> 核验与交付</p>
         <h1 class="sf-page-title">输出预览与检查</h1>
-        <p class="sf-page-description">在写入文件或数据库前，先核对列结构、来源分段和检查报告。</p>
       </div>
-      <el-radio-group class="sf-preview-tabs" :model-value="subTab" @change="onSubTabChange">
+      <el-radio-group class="sf-preview-tabs" size="small" :model-value="subTab" @change="onSubTabChange">
         <el-radio-button :value="0">结果预览</el-radio-button>
         <el-radio-button :value="1">检查报告</el-radio-button>
       </el-radio-group>
@@ -71,18 +116,26 @@ async function exportReport() {
 
     <template v-if="subTab === 0">
       <div class="sf-preview-toolbar">
-        <span class="sf-preview-help">
-          所有已选数据表连续显示，每张表前 5 行；表头只显示一次，来源切换处用分隔线区分
+        <span
+          class="sf-preview-title"
+          title="所有已选数据表连续显示，每张表前 5 行；表头只显示一次，来源切换处用分隔线区分"
+        >
+          {{ store.previewTitle }}
         </span>
         <el-tag v-if="store.preview" type="info" size="small" effect="plain">
           {{ store.preview.groups.length }} 张来源表
         </el-tag>
-        <el-button class="sf-toolbar-end" @click="store.showMergedPreview()">刷新预览</el-button>
+        <el-button class="sf-toolbar-end" size="small" @click="store.showMergedPreview()">刷新预览</el-button>
       </div>
-      <div class="sf-preview-title">{{ store.previewTitle }}</div>
-      <MergedPreviewGrid v-if="store.preview" :preview="store.preview" />
-      <div v-else class="sf-preview-empty">
-        点击「刷新预览」生成合并结果预览
+      <div ref="previewGridHost" class="sf-preview-grid-host">
+        <MergedPreviewGrid
+          v-if="store.preview"
+          :preview="store.preview"
+          :max-height="previewMaxHeight"
+        />
+        <div v-else class="sf-preview-empty">
+          点击「刷新预览」生成合并结果预览
+        </div>
       </div>
     </template>
 
@@ -115,8 +168,38 @@ async function exportReport() {
 </template>
 
 <style scoped>
+.sf-page-preview {
+  padding-top: var(--space-sm);
+  padding-bottom: var(--space-sm);
+}
+
 .sf-preview-head {
-  align-items: end;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
+  padding-bottom: var(--space-sm);
+}
+
+.sf-preview-head .sf-page-heading-copy {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.sf-preview-head .sf-page-code {
+  flex-shrink: 0;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.sf-preview-head .sf-page-code span {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.sf-preview-head .sf-page-title {
+  font-size: var(--text-xl);
+  line-height: 1.1;
 }
 
 .sf-preview-tabs {
@@ -128,14 +211,16 @@ async function exportReport() {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
-  margin-bottom: var(--space-sm);
   min-width: 0;
 }
 
-.sf-preview-help {
-  color: var(--sf-text-muted);
-  font-size: var(--text-xs);
-  line-height: 1.5;
+.sf-preview-toolbar {
+  min-height: 2rem;
+  margin-bottom: var(--space-xs);
+}
+
+.sf-check-toolbar {
+  margin-bottom: var(--space-sm);
 }
 
 .sf-toolbar-end,
@@ -156,7 +241,14 @@ async function exportReport() {
 }
 
 .sf-preview-title {
-  margin-bottom: var(--space-xs);
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-preview-grid-host {
+  min-width: 0;
 }
 
 .sf-preview-empty,

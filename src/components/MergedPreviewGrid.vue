@@ -2,13 +2,10 @@
 import { computed } from "vue";
 import type { MergedPreview, MergedPreviewGroup } from "../types";
 
-const props = withDefaults(
-  defineProps<{
-    preview: MergedPreview | null;
-    maxHeight?: number | string;
-  }>(),
-  { maxHeight: 430 }
-);
+const props = defineProps<{
+  preview: MergedPreview | null;
+  maxHeight?: number | string;
+}>();
 
 interface MergedPreviewRow {
   [key: string]: string | number | boolean;
