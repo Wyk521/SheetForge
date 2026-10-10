@@ -1,17 +1,15 @@
 <script setup lang="ts">
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useMergeStore } from "../stores/merge";
 
 const store = useMergeStore();
 
-async function openUpdatePage() {
-  if (store.updateUrl) {
-    await openUrl(store.updateUrl);
-    store.updateUrl = null;
-    store.updateText = "检查更新";
-  } else {
-    await store.checkUpdate();
+function openUpdate() {
+  if (store.updateAvailable) {
+    store.showAbout = false;
+    store.updateDialogVisible = true;
+    return;
   }
+  void store.checkUpdate(false);
 }
 </script>
 
@@ -28,7 +26,9 @@ async function openUpdatePage() {
       </div>
     </div>
     <template #footer>
-      <el-button size="small" @click="openUpdatePage">{{ store.updateText }}</el-button>
+      <el-button size="small" :loading="store.updateChecking" @click="openUpdate">
+        {{ store.updateText }}
+      </el-button>
       <el-button size="small" @click="store.openLog()">查看日志</el-button>
     </template>
   </el-dialog>

@@ -10,6 +10,7 @@ mod merge;
 mod model;
 mod pg_import;
 mod scan;
+mod updater;
 
 fn main() {
     tauri::Builder::default()
@@ -40,7 +41,8 @@ fn main() {
             commands::cancel_merge,
             commands::save_scheme,
             commands::open_scheme,
-            commands::check_update,
+            updater::check_update,
+            updater::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

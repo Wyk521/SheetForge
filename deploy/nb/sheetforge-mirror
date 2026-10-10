@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 022
+
+exec 9>/run/sheetforge-mirror.lock
+flock -n 9 || exit 0
+
+root=/srv/sheetforge-updates
+api=https://api.github.com/repos/Wyk521/SheetForge/releases/latest
+user_agent=SheetForge-NB-Mirror/1
+mkdir -p "$root/releases"
+
+release_json="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 -H "User-Agent: $user_agent" "$api")"
+tag="$(jq -er '.tag_name' <<<"$release_json")"
+version="${tag#v}"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid version: $version" >&2; exit 1; }
+
+exe_url="$(jq -er '.assets[] | select(.name == "SheetForge.exe") | .browser_download_url' <<<"$release_json")"
+sha_url="$(jq -er '.assets[] | select(.name == "SHA256SUMS.txt") | .browser_download_url' <<<"$release_json")"
+
+if [[ -f "$root/latest.json" ]] && [[ "$(jq -r '.version // empty' "$root/latest.json")" == "$version" ]] && [[ -f "$root/releases/$version/SheetForge.exe" ]]; then
+    exit 0
+fi
+
+work="$(mktemp -d "$root/.mirror.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -H "User-Agent: $user_agent" -o "$work/SheetForge.exe" "$exe_url"
+curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 -H "User-Agent: $user_agent" -o "$work/SHA256SUMS.txt" "$sha_url"
+
+expected="$(tr -d '\r' < "$work/SHA256SUMS.txt" | awk '$2 == "SheetForge.exe" { print tolower($1); exit }')"
+actual="$(sha256sum "$work/SheetForge.exe" | awk '{ print tolower($1) }')"
+[[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid SHA256SUMS.txt" >&2; exit 1; }
+[[ "$actual" == "$expected" ]] || { echo "checksum mismatch" >&2; exit 1; }
+
+release_dir="$root/releases/$version"
+mkdir -p "$release_dir"
+install -m 0644 "$work/SheetForge.exe" "$release_dir/SheetForge.exe"
+install -m 0644 "$work/SHA256SUMS.txt" "$release_dir/SHA256SUMS.txt"
+size="$(stat -c %s "$release_dir/SheetForge.exe")"
+
+jq -n \
+    --arg version "$version" \
+    --arg url "https://jp.kun.show:8443/sheetforge/releases/$version/SheetForge.exe" \
+    --arg sha256 "$actual" \
+    --argjson size "$size" \
+    '{version: $version, url: $url, sha256: $sha256, size: $size}' > "$work/latest.json"
+install -m 0644 "$work/latest.json" "$root/latest.json.new"
+mv -f "$root/latest.json.new" "$root/latest.json"

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 pub struct AppState {
     pub cancel: Arc<AtomicBool>,
@@ -30,18 +30,6 @@ pub struct StateSnapshot {
 pub struct PlanSnapshot {
     pub headers: Vec<String>,
     pub common_keys: Vec<String>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct UpdateResultDto {
-    pub version: String,
-    pub url: String,
-    pub newer: bool,
-}
-
-#[derive(Clone, Serialize)]
-pub struct UpdateFailedDto {
-    pub message: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -300,77 +288,4 @@ pub fn open_scheme(path: String) -> Result<MergeScheme, String> {
     config::remember(&mut settings.recent_schemes, path.display().to_string());
     let _ = config::save_settings(&settings);
     Ok(scheme)
-}
-
-#[tauri::command]
-pub fn check_update(app: AppHandle) {
-    std::thread::spawn(move || {
-        let result = (|| -> anyhow::Result<(String, String)> {
-            let user_agent = format!("SheetForge/{}", env!("CARGO_PKG_VERSION"));
-            let body = ureq::get("https://api.github.com/repos/Wyk521/SheetForge/releases/latest")
-                .header("User-Agent", &user_agent)
-                .call()?
-                .body_mut()
-                .read_to_string()?;
-            let value: serde_json::Value = serde_json::from_str(&body)?;
-            Ok((
-                value["tag_name"].as_str().unwrap_or_default().to_owned(),
-                value["html_url"].as_str().unwrap_or_default().to_owned(),
-            ))
-        })();
-        match result {
-            Ok((version, url)) => {
-                let newer = is_newer_version(&version, env!("CARGO_PKG_VERSION"));
-                let _ = app.emit(
-                    "update-result",
-                    UpdateResultDto {
-                        version,
-                        url,
-                        newer,
-                    },
-                );
-            }
-            Err(error) => {
-                let _ = app.emit(
-                    "update-failed",
-                    UpdateFailedDto {
-                        message: format!("{error:#}"),
-                    },
-                );
-            }
-        }
-    });
-}
-
-/// 解析 "v1.2.3" 形式的版本号；解析失败返回 None。
-fn version_tuple(version: &str) -> Option<(u64, u64, u64)> {
-    let trimmed = version.trim().trim_start_matches('v');
-    let mut parts = trimmed.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch = parts.next()?.parse().ok()?;
-    Some((major, minor, patch))
-}
-
-/// 语义化比较远程版本是否比当前版本新（字符串比较会把 0.10 误判为旧版本）。
-fn is_newer_version(remote: &str, current: &str) -> bool {
-    match (version_tuple(remote), version_tuple(current)) {
-        (Some(remote), Some(current)) => remote > current,
-        (Some(_), None) => true,
-        _ => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn version_comparison_is_semantic() {
-        assert!(is_newer_version("v0.10.0", "0.3.1"));
-        assert!(!is_newer_version("v0.3.1", "0.3.1"));
-        assert!(!is_newer_version("v0.2.9", "0.3.1"));
-        assert!(is_newer_version("1.0.0", "0.9.9"));
-        assert!(!is_newer_version("junk", "0.3.1"));
-    }
 }

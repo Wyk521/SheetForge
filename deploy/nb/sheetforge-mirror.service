@@ -1,0 +1,8 @@
+[Unit]
+Description=Mirror the latest SheetForge portable release to NB
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sheetforge-mirror

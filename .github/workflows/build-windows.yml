@@ -74,11 +74,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item src-tauri\target\release\SheetForge.exe dist\SheetForge.exe
-          Copy-Item src-tauri\target\release\bundle\nsis\*.exe dist\
-          Get-ChildItem dist\*.exe | Sort-Object Name | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)"
-          } | Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          $hash = (Get-FileHash dist\SheetForge.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  SheetForge.exe" | Set-Content -Encoding ascii dist\SHA256SUMS.txt
 
       - name: Sign executables when certificate is configured
         shell: pwsh
@@ -127,7 +124,7 @@ jobs:
             if ($manifest -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw "无法读取版本号" }
             $tag = "v$($Matches[1])"
           }
-          $assets = @("dist\SheetForge.exe", "dist\SHA256SUMS.txt") + (Get-ChildItem dist\*-setup.exe | ForEach-Object { $_.FullName })
+          $assets = @("dist\SheetForge.exe", "dist\SHA256SUMS.txt")
           gh release view $tag --repo "${{ github.repository }}" *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag $assets --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "表格合并 $tag" --generate-notes

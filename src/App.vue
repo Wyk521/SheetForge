@@ -9,6 +9,7 @@ import AboutDialog from "./components/AboutDialog.vue";
 import DatabaseDialog from "./components/DatabaseDialog.vue";
 import DatabaseConnectionsDialog from "./components/DatabaseConnectionsDialog.vue";
 import SourcePreviewDialog from "./components/SourcePreviewDialog.vue";
+import UpdateDialog from "./components/UpdateDialog.vue";
 import DataSourceView from "./views/DataSourceView.vue";
 import MergeRulesView from "./views/MergeRulesView.vue";
 import PreviewView from "./views/PreviewView.vue";
@@ -69,6 +70,7 @@ let unlistenDrop: (() => void) | undefined;
 onMounted(async () => {
   await store.initEvents();
   await store.loadState();
+  if (store.settings?.check_updates !== false) void store.checkUpdate(true);
   if (Object.keys(store.databaseProfiles).length === 0) {
     store.openDatabaseConnections();
   }
@@ -108,5 +110,6 @@ onUnmounted(() => {
     <DatabaseDialog />
     <DatabaseConnectionsDialog />
     <SourcePreviewDialog />
+    <UpdateDialog />
   </div>
 </template>

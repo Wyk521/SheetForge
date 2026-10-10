@@ -122,7 +122,14 @@ export interface PreflightDone {
 export interface UpdateResult {
   version: string;
   url: string;
+  sha256: string;
+  size: number;
   newer: boolean;
+}
+
+export interface UpdateDownloadProgress {
+  downloaded: number;
+  total: number;
 }
 
 export interface ConnectionProfile {

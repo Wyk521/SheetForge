@@ -30,6 +30,7 @@ import {
   type TableReloaded,
   type TablesReloaded,
   type TransformOp,
+  type UpdateDownloadProgress,
   type UpdateResult,
 } from "../types";
 
@@ -92,7 +93,12 @@ export const useMergeStore = defineStore("merge", () => {
   const sourcePreviewLoading = ref(false);
   const settings = ref<AppSettings | null>(null);
   const updateText = ref("检查更新");
-  const updateUrl = ref<string | null>(null);
+  const updateAvailable = ref<UpdateResult | null>(null);
+  const updateDialogVisible = ref(false);
+  const updateChecking = ref(false);
+  const updateDownloading = ref(false);
+  const updateProgress = ref(0);
+  const updateStatus = ref("");
   const collapsedGroups = ref<Set<string>>(new Set());
   const sourceSearch = ref("");
   const mappingSearch = ref("");
@@ -781,9 +787,34 @@ export const useMergeStore = defineStore("merge", () => {
   }
 
   // ---- 更新 / 其他 ----
-  async function checkUpdate() {
+  let silentUpdateCheck = false;
+
+  async function checkUpdate(silent = false) {
+    if (updateChecking.value) return;
+    silentUpdateCheck = silent;
+    updateChecking.value = true;
     updateText.value = "正在检查…";
-    await invoke("check_update");
+    try {
+      await invoke("check_update");
+    } catch (error) {
+      updateChecking.value = false;
+      updateText.value = "检查更新";
+      if (!silent) ElMessage.error(`检查更新失败：${error}`);
+    }
+  }
+
+  async function installUpdate() {
+    if (!updateAvailable.value || updateDownloading.value) return;
+    updateDownloading.value = true;
+    updateProgress.value = 0;
+    updateStatus.value = "正在下载…";
+    try {
+      await invoke("install_update", { update: updateAvailable.value });
+    } catch (error) {
+      updateDownloading.value = false;
+      updateStatus.value = "";
+      ElMessage.error(`更新失败：${error}`);
+    }
   }
 
   async function loadState() {
@@ -925,16 +956,40 @@ export const useMergeStore = defineStore("merge", () => {
         }
       }),
       await listen<UpdateResult>("update-result", (e) => {
+        updateChecking.value = false;
         if (e.payload.newer) {
-          updateText.value = `发现 ${e.payload.version}，打开下载页`;
-          updateUrl.value = e.payload.url;
+          updateText.value = `发现 v${e.payload.version}`;
+          updateAvailable.value = e.payload;
+          updateDialogVisible.value = true;
         } else {
           updateText.value = "已是最新版本";
+          if (!silentUpdateCheck) ElMessage.success("已是最新版本");
         }
+        silentUpdateCheck = false;
+      }),
+      await listen<UpdateDownloadProgress>("update-download-progress", (e) => {
+        updateStatus.value = "正在下载…";
+        updateProgress.value = e.payload.total > 0
+          ? Math.min(100, Math.round((e.payload.downloaded / e.payload.total) * 100))
+          : 0;
+      }),
+      await listen("update-installing", () => {
+        updateProgress.value = 100;
+        updateStatus.value = "正在重启…";
       }),
       await listen<{ message: string }>("update-failed", (e) => {
-        updateText.value = "检查失败，重试";
-        ElMessage.error(`检查更新失败：${e.payload.message}`);
+        const wasDownloading = updateDownloading.value;
+        updateChecking.value = false;
+        updateDownloading.value = false;
+        updateProgress.value = 0;
+        updateStatus.value = "";
+        updateText.value = wasDownloading && updateAvailable.value
+          ? `发现 v${updateAvailable.value.version}`
+          : "检查失败，重试";
+        if (wasDownloading || !silentUpdateCheck) {
+          ElMessage.error(`${wasDownloading ? "更新" : "检查更新"}失败：${e.payload.message}`);
+        }
+        silentUpdateCheck = false;
       })
     );
   }
@@ -963,7 +1018,8 @@ export const useMergeStore = defineStore("merge", () => {
     sources, options, outputPath, outputDestination, databaseImport, databaseProfiles,
     databaseConfigPath, databaseLastResult, showDatabaseDialog, showDatabaseConnectionsDialog,
     inputLabel, phase, progress, progressLabel, warnings,
-    checkIssues, checkRan, preview, previewTitle, settings, updateText, updateUrl,
+    checkIssues, checkRan, preview, previewTitle, settings, updateText,
+    updateAvailable, updateDialogVisible, updateChecking, updateDownloading, updateProgress, updateStatus,
     sourcePreview, sourcePreviewTitle, sourcePreviewVisible, sourcePreviewLoading,
     collapsedGroups, sourceSearch, sourceFilterActive, visibleSourceCount, visibleEnabledCount,
     mappingSearch, onlyMultiField, planHeaders,
@@ -979,7 +1035,7 @@ export const useMergeStore = defineStore("merge", () => {
     showSourcePreview, closeSourcePreview, showMergedPreview, runPreflight, startMerge, cancelMerge,
     loadDatabaseProfiles, saveDatabaseProfile, deleteDatabaseProfile, testDatabaseConnection,
     newDatabaseProfile, openDatabaseTarget, openDatabaseConnections,
-    saveScheme, openScheme, openSchemeByPath, checkUpdate, loadState, initEvents, revealOutput, openLog, refreshPlan,
+    saveScheme, openScheme, openSchemeByPath, checkUpdate, installUpdate, loadState, initEvents, revealOutput, openLog, refreshPlan,
     displayName, MODE_LABELS,
   };
 });
