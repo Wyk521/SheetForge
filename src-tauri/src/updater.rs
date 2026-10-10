@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter};
 
@@ -198,174 +198,81 @@ fn download_and_restart_portable(app: &AppHandle, update: &UpdateManifest) -> Re
     }
     drop(output);
 
-    let script_path = updater_script_path();
-    let script = windows_update_script(&current_exe, &staged_exe, std::process::id());
-    write_update_script(&script_path, &script)?;
-
-    start_update_script(&script_path)?;
+    let _new_process = replace_and_launch(&current_exe, &staged_exe)?;
 
     let _ = app.emit("update-installing", ());
     app.exit(0);
     Ok(())
 }
 
-fn updater_script_path() -> PathBuf {
-    std::env::temp_dir().join(format!("SheetForge-update-{}.ps1", std::process::id()))
-}
-
-fn powershell_literal(path: &Path) -> String {
-    path.to_string_lossy().replace('\'', "''")
-}
-
-fn write_update_script(path: &Path, script: &str) -> Result<()> {
-    // powershell.exe is Windows PowerShell 5.1, which otherwise reads UTF-8 as ANSI.
-    let mut encoded = Vec::with_capacity(script.len() + 3);
-    encoded.extend_from_slice(b"\xef\xbb\xbf");
-    encoded.extend_from_slice(script.as_bytes());
-    fs::write(path, encoded).context("无法创建更新脚本")
-}
-
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn start_update_script(script_path: &Path) -> Result<()> {
-    let ready_path = script_path.with_extension("ready");
-    if ready_path.exists() {
-        fs::remove_file(&ready_path).context("无法清理更新启动状态")?;
+fn replace_and_launch(current_exe: &Path, staged_exe: &Path) -> Result<std::process::Child> {
+    let directory = current_exe.parent().context("当前程序目录无效")?;
+    if !staged_exe.is_file() {
+        bail!("更新文件不存在，软件未退出");
     }
-    let mut child = spawn_update_script(script_path)?;
-    let result =
-        wait_for_update_script(&mut child, &ready_path, std::time::Duration::from_secs(15));
-    if result.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = fs::remove_file(script_path);
-    }
-    let _ = fs::remove_file(&ready_path);
-    result
-}
+    let backup = tempfile::Builder::new()
+        .prefix(".SheetForge-rollback-")
+        .tempfile_in(directory)
+        .context("无法保存旧版本，软件未退出")?;
+    fs::copy(current_exe, backup.path()).context("无法保存旧版本，软件未退出")?;
 
-fn wait_for_update_script(
-    child: &mut std::process::Child,
-    ready_path: &Path,
-    timeout: std::time::Duration,
-) -> Result<()> {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if let Some(status) = child.try_wait().context("无法检查更新程序状态")? {
-            bail!("更新程序启动失败（{status}），请查看临时目录中的 SheetForge-update.log");
+    // Reuse the same native EXE replacement library used by self_update and uv.
+    if let Err(error) = self_replace::self_replace(staged_exe) {
+        if !current_exe.exists() {
+            restore_update_backup(backup, current_exe)?;
         }
-        if ready_path.is_file() {
-            return Ok(());
+        return Err(error).context("替换更新失败，软件未退出");
+    }
+
+    match launch_replacement(current_exe) {
+        Ok(child) => {
+            let _ = fs::remove_file(staged_exe);
+            Ok(child)
         }
-        if std::time::Instant::now() >= deadline {
-            bail!("更新程序启动超时，软件未退出，请查看临时目录中的 SheetForge-update.log");
+        Err(error) => {
+            restore_update_backup(backup, current_exe)?;
+            Err(error).context("新版启动失败，已恢复旧版本，软件未退出")
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
-fn windows_update_script(current_exe: &Path, staged_exe: &Path, process_id: u32) -> String {
-    let current = powershell_literal(current_exe);
-    let staged = powershell_literal(staged_exe);
-    format!(
-        r#"$ErrorActionPreference = 'Stop'
-$processId = {process_id}
-$currentExe = '{current}'
-$stagedExe = '{staged}'
-$replacement = "$currentExe.new"
-$backup = "$currentExe.old"
-$ready = [IO.Path]::ChangeExtension($PSCommandPath, 'ready')
-$workingDirectory = Split-Path -LiteralPath $currentExe
-$started = $false
-try {{
-    if (-not (Test-Path -LiteralPath $stagedExe -PathType Leaf)) {{ throw 'Update file is missing' }}
-    $oldProcess = Get-Process -Id $processId -ErrorAction SilentlyContinue
-    [IO.File]::WriteAllText($ready, 'ready')
-    if ($null -ne $oldProcess) {{ $oldProcess | Wait-Process -Timeout 60 -ErrorAction Stop }}
-    Copy-Item -LiteralPath $stagedExe -Destination $replacement -Force
-    if (Test-Path -LiteralPath $backup) {{ Remove-Item -LiteralPath $backup -Force }}
-    for ($attempt = 0; ; $attempt++) {{
-        try {{
-            Move-Item -LiteralPath $currentExe -Destination $backup -Force
-            break
-        }} catch {{
-            if ($attempt -ge 49) {{ throw }}
-            Start-Sleep -Milliseconds 100
-        }}
-    }}
-    try {{
-        Move-Item -LiteralPath $replacement -Destination $currentExe -Force
-    }} catch {{
-        Move-Item -LiteralPath $backup -Destination $currentExe -Force
-        throw
-    }}
-    try {{
-        $newProcess = Start-Process -FilePath $currentExe -WorkingDirectory $workingDirectory -PassThru
-        $started = $true
-    }} catch {{
-        Remove-Item -LiteralPath $currentExe -Force -ErrorAction SilentlyContinue
-        Move-Item -LiteralPath $backup -Destination $currentExe -Force
-        Start-Process -FilePath $currentExe -WorkingDirectory $workingDirectory
-        $started = $true
-        throw
-    }}
-    Start-Sleep -Seconds 2
-    $newProcess.Refresh()
-    if ($newProcess.HasExited) {{
-        Remove-Item -LiteralPath $currentExe -Force -ErrorAction SilentlyContinue
-        Move-Item -LiteralPath $backup -Destination $currentExe -Force
-        Start-Process -FilePath $currentExe -WorkingDirectory $workingDirectory
-        throw '新版本启动失败，已恢复旧版本'
-    }}
-    if (Test-Path -LiteralPath $backup) {{ Remove-Item -LiteralPath $backup -Force }}
-    if (Test-Path -LiteralPath $stagedExe) {{ Remove-Item -LiteralPath $stagedExe -Force }}
-}} catch {{
-    Add-Content -LiteralPath "$env:TEMP\SheetForge-update.log" -Encoding UTF8 -Value "$(Get-Date -Format o) $($_.Exception.Message)"
-    if (-not $started -and $null -eq (Get-Process -Id $processId -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $currentExe)) {{
-        Start-Process -FilePath $currentExe -WorkingDirectory $workingDirectory
-    }}
-    exit 1
-}} finally {{
-    Remove-Item -LiteralPath $ready -Force -ErrorAction SilentlyContinue
-    if (Test-Path -LiteralPath $replacement) {{ Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue }}
-    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-}}
-"#
-    )
+fn restore_update_backup(backup: tempfile::NamedTempFile, current_exe: &Path) -> Result<()> {
+    if let Err(error) = fs::rename(backup.path(), current_exe) {
+        let (_, preserved_path) = backup.keep().context("无法保留旧版本备份")?;
+        bail!(
+            "恢复旧版本失败：{error}。备份保存在 {}，当前软件仍在运行",
+            preserved_path.display()
+        );
+    }
+    Ok(())
 }
 
-#[cfg(target_os = "windows")]
-fn spawn_update_script(script_path: &Path) -> Result<std::process::Child> {
-    use std::os::windows::process::CommandExt;
+fn launch_replacement(current_exe: &Path) -> Result<std::process::Child> {
     use std::process::{Command, Stdio};
-
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(std::env::temp_dir().join("SheetForge-update.log"))
-        .context("无法创建更新日志")?;
-    Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-WindowStyle",
-            "Hidden",
-            "-File",
-        ])
-        .arg(script_path)
+    let mut command = Command::new(current_exe);
+    command
+        .args(std::env::args_os().skip(1))
+        .current_dir(current_exe.parent().context("当前程序目录无效")?)
         .stdin(Stdio::null())
-        .stdout(log.try_clone().context("无法打开更新日志")?)
-        .stderr(log)
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .context("无法启动更新程序")
-}
-
-#[cfg(not(target_os = "windows"))]
-fn spawn_update_script(_script_path: &Path) -> Result<std::process::Child> {
-    bail!("自动更新仅支持 Windows 便携版")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = command.spawn().context("无法启动新版程序")?;
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    match child.try_wait() {
+        Ok(None) => Ok(child),
+        Ok(Some(status)) => bail!("新版程序启动后退出（{status}）"),
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(error).context("无法确认新版程序状态")
+        }
+    }
 }
 
 fn emit_failure(app: &AppHandle, error: anyhow::Error) {
@@ -427,145 +334,114 @@ mod tests {
     }
 
     #[test]
-    fn update_script_waits_replaces_and_restarts() {
-        let script = windows_update_script(
-            Path::new(r"C:\工具\SheetForge.exe"),
-            Path::new(r"C:\工具\.SheetForge.update"),
-            42,
-        );
-        assert!(script.contains("$oldProcess | Wait-Process -Timeout 60 -ErrorAction Stop"));
-        assert!(script.contains("Move-Item -LiteralPath $replacement -Destination $currentExe"));
-        assert!(script.contains("Start-Process -FilePath $currentExe"));
-    }
-
-    #[test]
-    fn update_script_preserves_unicode_and_quotes_with_utf8_bom() {
+    fn missing_update_does_not_touch_current_executable() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("update.ps1");
-        let script = windows_update_script(
-            Path::new(r"C:\工具箱\用户's [便携版]\SheetForge.exe"),
-            Path::new(r"C:\工具箱\用户's [便携版]\.SheetForge.exe.update"),
-            42,
-        );
-        write_update_script(&path, &script).unwrap();
-        let bytes = fs::read(path).unwrap();
-        assert!(bytes.starts_with(b"\xef\xbb\xbf"));
-        assert_eq!(std::str::from_utf8(&bytes[3..]).unwrap(), script);
-        assert!(script.contains(r"用户''s [便携版]"));
+        let current = dir.path().join("current.exe");
+        fs::write(&current, b"original").unwrap();
+        let result = replace_and_launch(&current, &dir.path().join("missing.exe"));
+        assert!(result.is_err());
+        assert_eq!(fs::read(current).unwrap(), b"original");
     }
 
+    // Run the updater in a disposable copy of the test executable, never the real test runner.
     #[test]
-    fn exited_helper_is_not_treated_as_ready() {
-        let dir = tempfile::tempdir().unwrap();
-        let ready = dir.path().join("update.ready");
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .arg("--list")
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        child.wait().unwrap();
-        // Even a stale marker must not make a dead helper look ready.
-        fs::write(&ready, "ready").unwrap();
-        let result = wait_for_update_script(&mut child, &ready, std::time::Duration::from_secs(1));
-        assert!(result.unwrap_err().to_string().contains("更新程序启动失败"));
+    fn native_update_child_entry() {
+        let Some(staged) = std::env::var_os("SHEETFORGE_TEST_UPDATE_STAGE") else {
+            return;
+        };
+        let current = std::env::current_exe().unwrap();
+        let result = replace_and_launch(&current, Path::new(&staged));
+        if std::env::var_os("SHEETFORGE_TEST_EXPECT_FAILURE").is_some() {
+            assert!(result.is_err(), "a broken update must not be accepted");
+        } else {
+            result.unwrap().wait().unwrap();
+        }
     }
 
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn windows_script_parse_failure_prevents_update_handoff() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("broken.ps1");
-        write_update_script(&script, "try { this script is incomplete").unwrap();
-        let error = start_update_script(&script).unwrap_err();
-        assert!(error.to_string().contains("更新程序启动失败"));
-        assert!(!script.exists());
-        assert!(!script.with_extension("ready").exists());
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn windows_powershell_replaces_and_restarts_in_unicode_directory() {
-        use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
-
+    fn run_native_update_fixture(body: Option<&str>, expect_failure: bool) {
+        use std::process::Command;
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("中文 空格's [便携版]");
-        fs::create_dir(&dir).unwrap();
-        let current = dir.join("SheetForge.exe");
-        let staged = dir.join(".SheetForge.exe.update");
-        let source = dir.join("stub.rs");
-        fs::write(
-            &source,
-            r#"fn main() {
+        let directory = root.path().join("中文 空格's [便携版]");
+        fs::create_dir(&directory).unwrap();
+        let current = directory.join("SheetForge.exe");
+        let staged = directory.join(".SheetForge.exe.update");
+        fs::copy(std::env::current_exe().unwrap(), &current).unwrap();
+        let original = fs::read(&current).unwrap();
+        if let Some(body) = body {
+            let source = directory.join("stub.rs");
+            fs::write(&source, body).unwrap();
+            assert!(Command::new("rustc")
+                .arg("--crate-name=update_stub")
+                .arg(&source)
+                .arg("-o")
+                .arg(&staged)
+                .status()
+                .unwrap()
+                .success());
+        } else {
+            fs::write(&staged, b"not an executable").unwrap();
+        }
+        let updated = fs::read(&staged).unwrap();
+        let mut command = Command::new(&current);
+        command
+            .args([
+                "--exact",
+                "updater::tests::native_update_child_entry",
+                "--nocapture",
+            ])
+            .env("SHEETFORGE_TEST_UPDATE_STAGE", &staged);
+        if expect_failure {
+            command.env("SHEETFORGE_TEST_EXPECT_FAILURE", "1");
+        } else {
+            command.env_remove("SHEETFORGE_TEST_EXPECT_FAILURE");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "native update failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if expect_failure {
+            assert_eq!(fs::read(&current).unwrap(), original);
+            assert!(staged.exists(), "keep the download when restarting fails");
+        } else {
+            assert_eq!(fs::read(&current).unwrap(), updated);
+            assert_eq!(
+                fs::read_to_string(directory.join("launched.txt")).unwrap(),
+                "new"
+            );
+            assert!(!staged.exists());
+        }
+        assert!(!fs::read_dir(&directory).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".SheetForge-rollback-")
+        }));
+    }
+
+    #[test]
+    fn native_update_replaces_and_restarts_in_unicode_directory() {
+        run_native_update_fixture(
+            Some(
+                r#"fn main() {
                 std::fs::write("launched.txt", "new").unwrap();
                 std::thread::sleep(std::time::Duration::from_secs(4));
             }"#,
-        )
-        .unwrap();
-        assert!(Command::new("rustc")
-            .arg("--crate-name=update_stub")
-            .arg(&source)
-            .arg("-o")
-            .arg(&staged)
-            .status()
-            .unwrap()
-            .success());
-        let new_bytes = fs::read(&staged).unwrap();
-        fs::write(&current, b"old executable").unwrap();
-        let mut old_process = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Start-Sleep -Seconds 60",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let script_path = dir.join("update.ps1");
-        write_update_script(
-            &script_path,
-            &windows_update_script(&current, &staged, old_process.id()),
-        )
-        .unwrap();
-        let mut helper = spawn_update_script(&script_path).unwrap();
-        let ready = wait_for_update_script(
-            &mut helper,
-            &script_path.with_extension("ready"),
-            Duration::from_secs(15),
+            ),
+            false,
         );
-        let untouched = fs::read(&current).unwrap() == b"old executable";
-        old_process.kill().unwrap();
-        old_process.wait().unwrap();
-        ready.unwrap();
-        assert!(
-            untouched,
-            "replacement must wait for the old process to exit"
-        );
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let status = loop {
-            if let Some(status) = helper.try_wait().unwrap() {
-                break status;
-            }
-            if Instant::now() >= deadline {
-                helper.kill().unwrap();
-                helper.wait().unwrap();
-                panic!("update helper did not finish");
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        };
-        assert!(
-            status.success(),
-            "check SheetForge-update.log for helper errors"
-        );
-        assert_eq!(fs::read_to_string(dir.join("launched.txt")).unwrap(), "new");
-        assert_eq!(fs::read(&current).unwrap(), new_bytes);
-        assert!(!staged.exists());
-        assert!(!script_path.exists());
-        assert!(!script_path.with_extension("ready").exists());
-        assert!(!dir.join("SheetForge.exe.old").exists());
-        std::thread::sleep(Duration::from_secs(3));
+    }
+
+    #[test]
+    fn native_update_restores_old_version_if_new_executable_is_invalid() {
+        run_native_update_fixture(None, true);
+    }
+
+    #[test]
+    fn native_update_restores_old_version_if_new_process_exits_early() {
+        run_native_update_fixture(Some("fn main() {}"), true);
     }
 }

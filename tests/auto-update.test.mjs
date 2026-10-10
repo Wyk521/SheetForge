@@ -28,9 +28,9 @@ test("便携版更新校验文件并在退出后替换重启", async () => {
   const updater = await read("src-tauri/src/updater.rs");
 
   assert.match(updater, /eq_ignore_ascii_case\(&update\.sha256\)/);
-  assert.match(updater, /\$oldProcess \| Wait-Process -Timeout 60/);
-  assert.match(updater, /Move-Item -LiteralPath \$replacement -Destination \$currentExe/);
-  assert.match(updater, /Start-Process -FilePath \$currentExe/);
+  assert.match(updater, /self_replace::self_replace\(staged_exe\)/);
+  assert.match(updater, /restore_update_backup\(backup, current_exe\)/);
+  assert.doesNotMatch(updater, /powershell\.exe|windows_update_script/);
   assert.match(updater, /app\.exit\(0\)/);
 });
 
