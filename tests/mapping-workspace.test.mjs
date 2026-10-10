@@ -25,6 +25,24 @@ test("字段映射工作区不再暴露表级编辑模式", async () => {
   assert.match(rules, /<FieldBatchView\s*\/>/);
 });
 
+test("主工作区去掉重复页头和说明性文案", async () => {
+  const [source, rules, preview, fieldBatch, about] = await Promise.all([
+    read("src/views/DataSourceView.vue"),
+    read("src/views/MergeRulesView.vue"),
+    read("src/views/PreviewView.vue"),
+    read("src/components/FieldBatchView.vue"),
+    read("src/components/AboutDialog.vue"),
+  ]);
+
+  for (const view of [source, rules, preview]) {
+    assert.doesNotMatch(view, /sf-page-code|sf-page-title|sf-page-description/);
+  }
+  assert.match(rules, /class="sf-tabbar"/);
+  assert.doesNotMatch(rules, /按来源字段集中编辑|当前模式不修改字段|输出中增加/);
+  assert.doesNotMatch(fieldBatch, /sf-field-batch-hint|改动会同步到所有启用表/);
+  assert.doesNotMatch(about, /Rust \+ Tauri|所有处理都在本机完成|关于表格合并/);
+});
+
 test("源表预览在当前工作区弹出，不再强制跳到输出页", async () => {
   const [fieldBatch, dataSource, app, dialog] = await Promise.all([
     read("src/components/FieldBatchView.vue"),
@@ -61,7 +79,7 @@ test("输出预览按来源表分组，并为每个来源单独抽样", async ()
   assert.match(inspect, /source_file:/);
   assert.match(commands, /Result<MergedPreview, String>/);
   assert.match(preview, /MergedPreviewGrid/);
-  assert.match(preview, /每张表前 5 行/);
+  assert.match(preview, /每张表显示前 5 行/);
   assert.match(grid, /label="来源表名"/);
   assert.match(grid, /label="来源 Sheet"/);
   assert.match(grid, /sf-merged-preview-group-start/);

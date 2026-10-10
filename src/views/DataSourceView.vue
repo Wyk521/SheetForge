@@ -56,40 +56,31 @@ async function previewSource(index: number) {
 
 <template>
   <div class="sf-page sf-page-source">
-    <div class="sf-page-head sf-source-head">
-      <div class="sf-page-heading-copy">
-        <p class="sf-page-code"><span>01</span> 装载与校准</p>
-        <h1 class="sf-page-title">选择数据源</h1>
-        <p class="sf-page-description">
-          「开始行」是表头从第几行开始；只有多行表头才需要调整「占用行数」
-        </p>
-      </div>
-      <div class="sf-page-actions">
-        <el-button type="primary" :disabled="store.busy" @click="store.chooseFolder()">
-          选择文件夹
-        </el-button>
-        <el-button :disabled="store.busy" @click="store.chooseFiles()">选择多个文件</el-button>
-        <el-select
-          v-model="recentFolder"
-          placeholder="最近文件夹…"
-          class="sf-recent-select"
-          clearable
-          :disabled="store.busy"
-          @change="onRecentFolder"
-        >
-          <el-option v-for="folder in recentFolders" :key="folder" :label="folder" :value="folder" />
-        </el-select>
-        <el-select
-          v-model="recentScheme"
-          placeholder="最近方案…"
-          class="sf-recent-select"
-          clearable
-          :disabled="store.busy"
-          @change="onRecentScheme"
-        >
-          <el-option v-for="scheme in recentSchemes" :key="scheme" :label="scheme" :value="scheme" />
-        </el-select>
-      </div>
+    <div class="sf-page-actions sf-source-actions">
+      <el-button type="primary" :disabled="store.busy" @click="store.chooseFolder()">
+        选择文件夹
+      </el-button>
+      <el-button :disabled="store.busy" @click="store.chooseFiles()">选择多个文件</el-button>
+      <el-select
+        v-model="recentFolder"
+        placeholder="最近文件夹…"
+        class="sf-recent-select"
+        clearable
+        :disabled="store.busy"
+        @change="onRecentFolder"
+      >
+        <el-option v-for="folder in recentFolders" :key="folder" :label="folder" :value="folder" />
+      </el-select>
+      <el-select
+        v-model="recentScheme"
+        placeholder="最近方案…"
+        class="sf-recent-select"
+        clearable
+        :disabled="store.busy"
+        @change="onRecentScheme"
+      >
+        <el-option v-for="scheme in recentSchemes" :key="scheme" :label="scheme" :value="scheme" />
+      </el-select>
     </div>
 
     <div class="sf-workbench-toolbar">
@@ -129,7 +120,7 @@ async function previewSource(index: number) {
           <div class="sf-empty-title">
             把 Excel / CSV 拖到这里
           </div>
-          <div class="sf-empty-copy">也可以选择文件夹，软件会递归查找所有支持的工作簿</div>
+          <div class="sf-empty-copy">或从上方选择文件夹</div>
           <el-button type="primary" :disabled="store.busy" @click="store.chooseFiles()">选择多个文件</el-button>
         </div>
       </template>
@@ -181,7 +172,7 @@ async function previewSource(index: number) {
                 列 · 推荐表头第 {{ item.table.suggested_header_row }}
               </div>
             </div>
-            <span class="sf-field-label">开始行</span>
+            <span class="sf-field-label" title="表头所在的起始行">开始行</span>
             <el-input-number
               :model-value="item.table.header_row"
               :min="1"
@@ -191,7 +182,7 @@ async function previewSource(index: number) {
               :disabled="store.busy"
               @change="(value: number | undefined) => store.reloadTable(item.index, value ?? 1, item.table.header_rows)"
             />
-            <span class="sf-field-label">占用行数</span>
+            <span class="sf-field-label" title="仅多行表头需要调整">占用行数</span>
             <el-input-number
               :model-value="item.table.header_rows"
               :min="1"
@@ -216,8 +207,9 @@ async function previewSource(index: number) {
 </template>
 
 <style scoped>
-.sf-source-head {
-  align-items: end;
+.sf-source-actions {
+  justify-content: flex-start;
+  margin-bottom: var(--space-sm);
 }
 
 .sf-source-search {

@@ -103,12 +103,8 @@ async function exportReport() {
 
 <template>
   <div class="sf-page sf-page-preview">
-    <div class="sf-page-head sf-preview-head">
-      <div class="sf-page-heading-copy">
-        <p class="sf-page-code"><span>03</span> 核验与交付</p>
-        <h1 class="sf-page-title">输出预览与检查</h1>
-      </div>
-      <el-radio-group class="sf-preview-tabs" size="small" :model-value="subTab" @change="onSubTabChange">
+    <div class="sf-tabbar">
+      <el-radio-group class="sf-preview-tabs" size="small" :model-value="subTab" aria-label="输出视图" @change="onSubTabChange">
         <el-radio-button :value="0">结果预览</el-radio-button>
         <el-radio-button :value="1">检查报告</el-radio-button>
       </el-radio-group>
@@ -118,13 +114,10 @@ async function exportReport() {
       <div class="sf-preview-toolbar">
         <span
           class="sf-preview-title"
-          title="所有已选数据表连续显示，每张表前 5 行；表头只显示一次，来源切换处用分隔线区分"
+          title="每张表显示前 5 行"
         >
           {{ store.previewTitle }}
         </span>
-        <el-tag v-if="store.preview" type="info" size="small" effect="plain">
-          {{ store.preview.groups.length }} 张来源表
-        </el-tag>
         <el-button class="sf-toolbar-end" size="small" @click="store.showMergedPreview()">刷新预览</el-button>
       </div>
       <div ref="previewGridHost" class="sf-preview-grid-host">
@@ -171,35 +164,6 @@ async function exportReport() {
 .sf-page-preview {
   padding-top: var(--space-sm);
   padding-bottom: var(--space-sm);
-}
-
-.sf-preview-head {
-  align-items: center;
-  gap: var(--space-md);
-  margin-bottom: var(--space-sm);
-  padding-bottom: var(--space-sm);
-}
-
-.sf-preview-head .sf-page-heading-copy {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.sf-preview-head .sf-page-code {
-  flex-shrink: 0;
-  margin: 0;
-  white-space: nowrap;
-}
-
-.sf-preview-head .sf-page-code span {
-  width: 1.5rem;
-  height: 1.5rem;
-}
-
-.sf-preview-head .sf-page-title {
-  font-size: var(--text-xl);
-  line-height: 1.1;
 }
 
 .sf-preview-tabs {

@@ -53,9 +53,6 @@ const filteredGroups = computed(() => {
     <div class="sf-field-batch-toolbar">
       <el-input v-model="store.mappingSearch" class="sf-field-batch-search" placeholder="搜索字段" clearable />
       <el-checkbox v-model="store.onlyMultiField">只看多表字段</el-checkbox>
-      <span class="sf-field-batch-hint">
-        按来源字段分组，改动会同步到所有启用表；展开后点击“预览源表”即可在当前工作区查看
-      </span>
     </div>
     <div v-if="filteredGroups.length > 0" class="sf-field-table-wrap">
       <el-table class="sf-field-table" :data="filteredGroups" size="small" border>
@@ -187,15 +184,6 @@ const filteredGroups = computed(() => {
   flex: 0 0 12.5rem;
 }
 
-.sf-field-batch-hint {
-  flex: 1;
-  min-width: 0;
-  color: var(--sf-text-muted);
-  font-size: var(--text-2xs);
-  line-height: 1.4;
-  text-align: right;
-}
-
 .sf-field-table-wrap {
   width: 100%;
   min-width: 0;
@@ -256,9 +244,5 @@ const filteredGroups = computed(() => {
     flex-wrap: wrap;
   }
 
-  .sf-field-batch-hint {
-    flex-basis: 100%;
-    text-align: left;
-  }
 }
 </style>

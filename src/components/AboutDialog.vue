@@ -16,25 +16,20 @@ async function openUpdatePage() {
 </script>
 
 <template>
-  <el-dialog v-model="store.showAbout" title="关于表格合并" width="min(440px, 92vw)" :close-on-click-modal="true">
+  <el-dialog v-model="store.showAbout" title="关于" width="min(380px, 92vw)" :close-on-click-modal="true">
     <div class="sf-about-layout">
       <div class="sf-logo sf-about-logo">表</div>
       <div class="sf-about-copy">
         <div class="sf-about-title">表格合并</div>
-        <div class="sf-about-subtitle">
-          本地批量表格工具 · 使用 Rust + Tauri 构建，表格内容不会上传
-        </div>
-        <div class="sf-about-features">
-          <div>· 递归扫描文件夹，支持 xlsx / xlsm / xls / xlsb / ods / csv / tsv</div>
-          <div>· 两种合并方式：修正表头、列名交集</div>
-          <div>· 所有处理都在本机完成，仅“检查更新”会联网</div>
+        <div class="sf-about-meta">
+          <span>格式</span><span>Excel / CSV / ODS</span>
+          <span>处理</span><span>本机</span>
         </div>
       </div>
     </div>
     <template #footer>
-      <el-button @click="openUpdatePage">{{ store.updateText }}</el-button>
-      <el-button @click="store.openLog()">查看日志</el-button>
-      <el-button type="primary" @click="store.showAbout = false">关闭</el-button>
+      <el-button size="small" @click="openUpdatePage">{{ store.updateText }}</el-button>
+      <el-button size="small" @click="store.openLog()">查看日志</el-button>
     </template>
   </el-dialog>
 </template>
@@ -42,7 +37,7 @@ async function openUpdatePage() {
 <style scoped>
 .sf-about-layout {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-md);
 }
 
@@ -63,16 +58,16 @@ async function openUpdatePage() {
   font-weight: 700;
 }
 
-.sf-about-subtitle {
-  margin: var(--space-2xs) 0 var(--space-sm);
-  color: var(--sf-text-muted);
+.sf-about-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3xs) var(--space-sm);
+  margin-top: var(--space-xs);
+  color: var(--sf-text-secondary);
   font-size: var(--text-2xs);
-  line-height: 1.55;
 }
 
-.sf-about-features {
-  color: var(--sf-text-secondary);
-  font-size: var(--text-xs);
-  line-height: 1.8;
+.sf-about-meta span:nth-child(odd) {
+  color: var(--sf-text-muted);
 }
 </style>

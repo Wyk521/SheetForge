@@ -650,7 +650,7 @@ export const useMergeStore = defineStore("merge", () => {
       if (request !== mergedPreviewRequest) return;
       preview.value = result;
       const rowCount = result.groups.reduce((total, group) => total + group.rows.length, 0);
-      previewTitle.value = `按来源预览 · ${result.groups.length} 张表 · 每张前 5 行 · ${result.headers.length} 列 · 共 ${rowCount} 行`;
+      previewTitle.value = `预览 ${rowCount} 行 · ${result.headers.length} 列 · ${result.groups.length} 张表`;
     } catch (error) {
       if (request !== mergedPreviewRequest) return;
       ElMessage.error(`结果预览失败：${error}`);
