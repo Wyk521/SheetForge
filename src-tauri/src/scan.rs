@@ -1,20 +1,41 @@
 use crate::model::{header_key, make_default_mappings, normalize_headers, SourceKind, SourceTable};
-use anyhow::{Context, Result};
-use calamine::{open_workbook, open_workbook_auto, Data, Reader, Xlsx};
+use anyhow::{bail, Context, Result};
+use calamine::{open_workbook, open_workbook_auto, Data, Ods, Reader, Sheets, Xls, Xlsb, Xlsx};
 use csv::{ByteRecord, ReaderBuilder};
-use encoding_rs::GBK;
+use dom_query::Document;
+use encoding_rs::{GBK, UTF_16BE, UTF_16LE};
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader as XmlReader;
 use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
 const SAMPLE_BYTES: usize = 256 * 1024;
 const AUTO_HEADER_ROWS: usize = 20;
 const EXACT_COUNT_LIMIT: u64 = 64 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkbookFormat {
+    Xlsx,
+    Xls,
+    Xlsb,
+    Ods,
+    Html,
+    SpreadsheetXml,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MarkupSheet {
+    pub(crate) name: String,
+    pub(crate) rows: Vec<Vec<String>>,
+}
 
 #[derive(Clone, Serialize)]
 pub struct ScanProgressDto {
@@ -77,6 +98,304 @@ pub(crate) fn is_xlsx_path(path: &Path) -> bool {
             .as_deref(),
         Some("xlsx" | "xlsm" | "xlam")
     )
+}
+
+pub(crate) fn is_markup_workbook(path: &Path) -> bool {
+    workbook_format(path).is_ok_and(|format| {
+        matches!(
+            format,
+            WorkbookFormat::Html | WorkbookFormat::SpreadsheetXml
+        )
+    })
+}
+
+fn workbook_format(path: &Path) -> Result<WorkbookFormat> {
+    let mut file = File::open(path).with_context(|| format!("无法读取 {}", path.display()))?;
+    let mut prefix = vec![0_u8; 16 * 1024];
+    let read = file.read(&mut prefix)?;
+    prefix.truncate(read);
+    if prefix.is_empty() {
+        bail!("文件为空");
+    }
+
+    if prefix.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        return Ok(WorkbookFormat::Xls);
+    }
+
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    if prefix.starts_with(b"PK\x03\x04") {
+        return Ok(match extension.as_deref() {
+            Some("xlsb") => WorkbookFormat::Xlsb,
+            Some("ods") => WorkbookFormat::Ods,
+            _ => WorkbookFormat::Xlsx,
+        });
+    }
+
+    let marker = decode_markup_document(&prefix).to_ascii_lowercase();
+    let marker = marker.trim_start_matches(['\u{feff}', '\0', ' ', '\t', '\r', '\n']);
+    if marker.starts_with("<!doctype html")
+        || marker.starts_with("<html")
+        || marker.starts_with("<table")
+        || (marker.contains("<html") && marker.contains("<table"))
+    {
+        return Ok(WorkbookFormat::Html);
+    }
+    if marker.starts_with("<?xml")
+        && (marker.contains("urn:schemas-microsoft-com:office:spreadsheet")
+            || marker.contains("<workbook"))
+    {
+        return Ok(WorkbookFormat::SpreadsheetXml);
+    }
+
+    Ok(match extension.as_deref() {
+        Some("xlsx" | "xlsm" | "xlam") => WorkbookFormat::Xlsx,
+        Some("xls" | "xla") => WorkbookFormat::Xls,
+        Some("xlsb") => WorkbookFormat::Xlsb,
+        Some("ods") => WorkbookFormat::Ods,
+        _ => bail!("无法识别表格格式"),
+    })
+}
+
+pub(crate) fn open_xlsx_workbook(path: &Path) -> Result<Xlsx<BufReader<File>>> {
+    let mut last_error = None;
+    for attempt in 0..3 {
+        match open_workbook::<Xlsx<_>, _>(path) {
+            Ok(workbook) => return Ok(workbook),
+            Err(error) => {
+                let incomplete = error
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .contains("unexpected end");
+                last_error = Some(error);
+                if !incomplete || attempt == 2 {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(250 * (attempt + 1)));
+            }
+        }
+    }
+    let _ = last_error.context("无法打开工作簿")?;
+    bail!("XLSX 文件不完整、已损坏或格式与扩展名不符；请等待文件下载或复制完成后重试，仍然失败时请用 Excel 另存为新的 XLSX 文件")
+}
+
+pub(crate) fn open_detected_workbook(path: &Path) -> Result<Sheets<BufReader<File>>> {
+    match workbook_format(path)? {
+        WorkbookFormat::Xlsx => Ok(Sheets::Xlsx(open_xlsx_workbook(path)?)),
+        WorkbookFormat::Xls => open_workbook::<Xls<_>, _>(path)
+            .map(Sheets::Xls)
+            .context("无法打开工作簿"),
+        WorkbookFormat::Xlsb => open_workbook::<Xlsb<_>, _>(path)
+            .map(Sheets::Xlsb)
+            .context("无法打开工作簿"),
+        WorkbookFormat::Ods => open_workbook::<Ods<_>, _>(path)
+            .map(Sheets::Ods)
+            .context("无法打开工作簿"),
+        WorkbookFormat::Html | WorkbookFormat::SpreadsheetXml => {
+            bail!("标记表格需要使用兼容读取器")
+        }
+    }
+}
+
+pub(crate) fn read_markup_workbook(path: &Path) -> Result<Vec<MarkupSheet>> {
+    let bytes = fs::read(path).with_context(|| format!("无法读取 {}", path.display()))?;
+    let content = decode_markup_document(&bytes);
+    match workbook_format(path)? {
+        WorkbookFormat::Html => read_html_tables(&content),
+        WorkbookFormat::SpreadsheetXml => read_spreadsheet_xml(&content),
+        _ => bail!("文件不是兼容表格"),
+    }
+}
+
+fn decode_markup_document(bytes: &[u8]) -> String {
+    if let Some(bytes) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return UTF_16LE.decode(bytes).0.into_owned();
+    }
+    if let Some(bytes) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return UTF_16BE.decode(bytes).0.into_owned();
+    }
+    decode_csv_field(bytes)
+}
+
+fn read_html_tables(html: &str) -> Result<Vec<MarkupSheet>> {
+    let document = Document::from(html);
+    let mut sheets = Vec::new();
+    for (table_index, table) in document.select("table").iter().enumerate() {
+        let mut rows = Vec::new();
+        for row in table.select("tr").iter() {
+            let cells = row.children().filter("td, th");
+            if cells.is_empty() {
+                continue;
+            }
+            let mut values = Vec::new();
+            for cell in cells.iter() {
+                let value = cell
+                    .formatted_text()
+                    .replace('\u{a0}', " ")
+                    .trim()
+                    .to_owned();
+                values.push(value);
+                let colspan = cell
+                    .attr("colspan")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(1)
+                    .clamp(1, 16_384);
+                values.extend(std::iter::repeat_n(String::new(), colspan - 1));
+            }
+            rows.push(values);
+        }
+        if rows
+            .iter()
+            .any(|row| row.iter().any(|cell| !cell.trim().is_empty()))
+        {
+            let name = table
+                .attr("id")
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| format!("Sheet{}", table_index + 1));
+            sheets.push(MarkupSheet { name, rows });
+        }
+    }
+    if sheets.is_empty() {
+        bail!("网页表格中没有找到可读取的数据表");
+    }
+    Ok(sheets)
+}
+
+fn read_spreadsheet_xml(xml: &str) -> Result<Vec<MarkupSheet>> {
+    let mut reader = XmlReader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut sheets = Vec::new();
+    let mut current_sheet: Option<MarkupSheet> = None;
+    let mut current_row: Option<Vec<String>> = None;
+    let mut current_cell: Option<String> = None;
+    let mut in_data = false;
+
+    loop {
+        match reader.read_event().context("XML 表格格式不正确")? {
+            Event::Start(event) => match event.local_name().as_ref() {
+                name if name.eq_ignore_ascii_case(b"Worksheet") => {
+                    let name = xml_attribute(&event, b"Name", reader.decoder())
+                        .unwrap_or_else(|| format!("Sheet{}", sheets.len() + 1));
+                    current_sheet = Some(MarkupSheet {
+                        name,
+                        rows: Vec::new(),
+                    });
+                }
+                name if name.eq_ignore_ascii_case(b"Row") && current_sheet.is_some() => {
+                    current_row = Some(Vec::new());
+                }
+                name if name.eq_ignore_ascii_case(b"Cell") && current_row.is_some() => {
+                    if let Some(index) = xml_attribute(&event, b"Index", reader.decoder())
+                        .and_then(|value| value.parse::<usize>().ok())
+                    {
+                        let row = current_row.as_mut().expect("row checked above");
+                        while row.len() + 1 < index {
+                            row.push(String::new());
+                        }
+                    }
+                    current_cell = Some(String::new());
+                }
+                name if name.eq_ignore_ascii_case(b"Data") && current_cell.is_some() => {
+                    in_data = true;
+                }
+                _ => {}
+            },
+            Event::Empty(event)
+                if event.local_name().as_ref().eq_ignore_ascii_case(b"Cell")
+                    && current_row.is_some() =>
+            {
+                if let Some(index) = xml_attribute(&event, b"Index", reader.decoder())
+                    .and_then(|value| value.parse::<usize>().ok())
+                {
+                    let row = current_row.as_mut().expect("row checked above");
+                    while row.len() + 1 < index {
+                        row.push(String::new());
+                    }
+                }
+                current_row
+                    .as_mut()
+                    .expect("row checked above")
+                    .push(String::new());
+            }
+            Event::Text(event) if in_data => {
+                let decoded = event.decode().context("无法解码 XML 单元格")?;
+                if let Some(cell) = current_cell.as_mut() {
+                    cell.push_str(&decoded);
+                }
+            }
+            Event::GeneralRef(event) if in_data => {
+                let value = if let Some(value) = event.resolve_char_ref()? {
+                    value.to_string()
+                } else {
+                    let name = event.decode().context("无法解码 XML 实体")?;
+                    quick_xml::escape::resolve_predefined_entity(&name)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("&{name};"))
+                };
+                if let Some(cell) = current_cell.as_mut() {
+                    cell.push_str(&value);
+                }
+            }
+            Event::CData(event) if in_data => {
+                if let Some(cell) = current_cell.as_mut() {
+                    cell.push_str(&event.decode().context("无法解码 XML 单元格")?);
+                }
+            }
+            Event::End(event) => match event.local_name().as_ref() {
+                name if name.eq_ignore_ascii_case(b"Data") => in_data = false,
+                name if name.eq_ignore_ascii_case(b"Cell") => {
+                    if let (Some(row), Some(cell)) = (current_row.as_mut(), current_cell.take()) {
+                        row.push(cell.trim().to_owned());
+                    }
+                }
+                name if name.eq_ignore_ascii_case(b"Row") => {
+                    if let (Some(sheet), Some(row)) = (current_sheet.as_mut(), current_row.take()) {
+                        sheet.rows.push(row);
+                    }
+                }
+                name if name.eq_ignore_ascii_case(b"Worksheet") => {
+                    if let Some(sheet) = current_sheet.take() {
+                        if sheet
+                            .rows
+                            .iter()
+                            .any(|row| row.iter().any(|cell| !cell.trim().is_empty()))
+                        {
+                            sheets.push(sheet);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    if sheets.is_empty() {
+        bail!("XML 表格中没有找到可读取的数据表");
+    }
+    Ok(sheets)
+}
+
+fn xml_attribute(
+    event: &BytesStart<'_>,
+    local_name: &[u8],
+    decoder: quick_xml::encoding::Decoder,
+) -> Option<String> {
+    event.attributes().filter_map(Result::ok).find_map(|attr| {
+        attr.key
+            .local_name()
+            .as_ref()
+            .eq_ignore_ascii_case(local_name)
+            .then(|| {
+                attr.decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, decoder)
+                    .ok()
+                    .map(|value| value.into_owned())
+            })
+            .flatten()
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -307,8 +626,14 @@ pub fn scan_file(path: &Path) -> Result<(Vec<SourceTable>, Vec<String>)> {
             }
             Ok((vec![table], warnings))
         }
-        Some("xlsx" | "xlsm") => Ok((scan_xlsx_auto_headers(path)?, Vec::new())),
-        Some("xls" | "xlsb" | "ods") => Ok((scan_workbook_auto_headers(path)?, Vec::new())),
+        Some("xlsx" | "xlsm" | "xls" | "xlsb" | "ods") => {
+            let tables = if is_xlsx_path(path) {
+                scan_xlsx_auto_headers(path)?
+            } else {
+                scan_workbook_auto_headers(path)?
+            };
+            Ok((tables, Vec::new()))
+        }
         _ => Ok((Vec::new(), Vec::new())),
     }
 }
@@ -532,7 +857,20 @@ fn scan_csv(
 }
 
 fn scan_workbook_auto_headers(path: &Path) -> Result<Vec<SourceTable>> {
-    let mut workbook = open_workbook_auto(path).with_context(|| "无法打开工作簿")?;
+    match open_workbook_auto(path) {
+        Ok(workbook) => scan_range_workbook_auto_headers(path, workbook),
+        Err(primary_error) => match workbook_format(path)? {
+            WorkbookFormat::Html | WorkbookFormat::SpreadsheetXml => scan_markup_auto_headers(path),
+            _ => scan_range_workbook_auto_headers(path, open_detected_workbook(path)?)
+                .with_context(|| format!("常规读取失败：{primary_error}")),
+        },
+    }
+}
+
+fn scan_range_workbook_auto_headers(
+    path: &Path,
+    mut workbook: Sheets<BufReader<File>>,
+) -> Result<Vec<SourceTable>> {
     let mut result = Vec::new();
     for sheet_name in workbook.sheet_names().to_vec() {
         let range = workbook
@@ -555,8 +893,21 @@ fn scan_workbook_auto_headers(path: &Path) -> Result<Vec<SourceTable>> {
 }
 
 fn scan_xlsx_auto_headers(path: &Path) -> Result<Vec<SourceTable>> {
-    let mut workbook: Xlsx<BufReader<File>> =
-        open_workbook(path).with_context(|| "无法打开工作簿")?;
+    match open_xlsx_workbook(path) {
+        Ok(workbook) => scan_xlsx_reader_auto_headers(path, workbook),
+        Err(primary_error) => match workbook_format(path)? {
+            WorkbookFormat::Html | WorkbookFormat::SpreadsheetXml => scan_markup_auto_headers(path),
+            WorkbookFormat::Xlsx => Err(primary_error),
+            _ => scan_range_workbook_auto_headers(path, open_detected_workbook(path)?)
+                .with_context(|| format!("常规 XLSX 读取失败：{primary_error:#}")),
+        },
+    }
+}
+
+fn scan_xlsx_reader_auto_headers(
+    path: &Path,
+    mut workbook: Xlsx<BufReader<File>>,
+) -> Result<Vec<SourceTable>> {
     let mut result = Vec::new();
     for sheet_name in workbook.sheet_names().to_vec() {
         let mut sample_rows = Vec::new();
@@ -603,18 +954,53 @@ fn scan_workbook_sheet(
     suggested_header_row: usize,
 ) -> Result<SourceTable> {
     if is_xlsx_path(path) {
-        let mut workbook: Xlsx<BufReader<File>> =
-            open_workbook(path).with_context(|| "无法打开工作簿")?;
-        return scan_xlsx_sheet(
-            &mut workbook,
+        return match open_xlsx_workbook(path) {
+            Ok(mut workbook) => scan_xlsx_sheet(
+                &mut workbook,
+                path,
+                sheet_name,
+                header_row,
+                header_rows,
+                suggested_header_row,
+            ),
+            Err(primary_error) => scan_workbook_sheet_fallback(
+                path,
+                sheet_name,
+                header_row,
+                header_rows,
+                suggested_header_row,
+            )
+            .with_context(|| format!("常规 XLSX 读取失败：{primary_error:#}")),
+        };
+    }
+    match open_workbook_auto(path) {
+        Ok(workbook) => scan_range_workbook_sheet(
             path,
             sheet_name,
             header_row,
             header_rows,
             suggested_header_row,
-        );
+            workbook,
+        ),
+        Err(primary_error) => scan_workbook_sheet_fallback(
+            path,
+            sheet_name,
+            header_row,
+            header_rows,
+            suggested_header_row,
+        )
+        .with_context(|| format!("常规读取失败：{primary_error}")),
     }
-    let mut workbook = open_workbook_auto(path).with_context(|| "无法打开工作簿")?;
+}
+
+fn scan_range_workbook_sheet(
+    path: &Path,
+    sheet_name: &str,
+    header_row: usize,
+    header_rows: usize,
+    suggested_header_row: usize,
+    mut workbook: Sheets<BufReader<File>>,
+) -> Result<SourceTable> {
     let range = workbook
         .worksheet_range(sheet_name)
         .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
@@ -629,6 +1015,96 @@ fn scan_workbook_sheet(
         header_row,
         header_rows,
         suggested_header_row,
+    ))
+}
+
+fn scan_workbook_sheet_fallback(
+    path: &Path,
+    sheet_name: &str,
+    header_row: usize,
+    header_rows: usize,
+    suggested_header_row: usize,
+) -> Result<SourceTable> {
+    if is_markup_workbook(path) {
+        return scan_markup_sheet(
+            path,
+            sheet_name,
+            header_row,
+            header_rows,
+            suggested_header_row,
+        );
+    }
+    scan_range_workbook_sheet(
+        path,
+        sheet_name,
+        header_row,
+        header_rows,
+        suggested_header_row,
+        open_detected_workbook(path)?,
+    )
+}
+
+fn scan_markup_auto_headers(path: &Path) -> Result<Vec<SourceTable>> {
+    let mut result = Vec::new();
+    for sheet in read_markup_workbook(path)? {
+        let suggested = recommend_header(sheet.rows.iter().take(AUTO_HEADER_ROWS).cloned()) + 1;
+        let header_parts = sheet
+            .rows
+            .iter()
+            .skip(suggested - 1)
+            .take(1)
+            .cloned()
+            .collect::<Vec<_>>();
+        let width = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
+        let headers = combine_header_rows_with_width(&header_parts, width);
+        result.push(source_table_from_headers(
+            path,
+            sheet.name,
+            suggested,
+            1,
+            suggested,
+            headers,
+            sheet.rows.len().saturating_sub(suggested) as u64,
+        ));
+    }
+    Ok(result)
+}
+
+fn scan_markup_sheet(
+    path: &Path,
+    sheet_name: &str,
+    header_row: usize,
+    header_rows: usize,
+    suggested_header_row: usize,
+) -> Result<SourceTable> {
+    let sheets = read_markup_workbook(path)?;
+    let sheet = sheets
+        .iter()
+        .find(|sheet| sheet.name == sheet_name)
+        .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
+    let header_row = header_row.max(1);
+    let header_rows = header_rows.clamp(1, 3);
+    let required = header_row + header_rows - 1;
+    if sheet.rows.len() < required {
+        bail!("工作表不足 {required} 行，无法设为表头");
+    }
+    let width = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
+    let parts = sheet
+        .rows
+        .iter()
+        .skip(header_row - 1)
+        .take(header_rows)
+        .cloned()
+        .collect::<Vec<_>>();
+    let headers = combine_header_rows_with_width(&parts, width);
+    Ok(source_table_from_headers(
+        path,
+        sheet.name.clone(),
+        header_row,
+        header_rows,
+        suggested_header_row,
+        headers,
+        sheet.rows.len().saturating_sub(required) as u64,
     ))
 }
 
@@ -1042,6 +1518,84 @@ mod tests {
                 .any(|warning| warning.contains("编码可能不是 UTF-8 或 GBK")),
             "warnings: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn html_table_export_with_xls_extension_is_supported() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("网页导出.xls");
+        std::fs::write(
+            &path,
+            "\n\n\n<!DOCTYPE html><html><body><table id=\"2025\"><tr><th>姓名</th><th>金额</th></tr><tr><td>张三</td><td>12</td></tr></table></body></html>",
+        )
+        .unwrap();
+
+        let (tables, warnings) = scan_file(&path).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].sheet_name, "2025");
+        assert_eq!(tables[0].headers, vec!["姓名", "金额"]);
+        assert_eq!(tables[0].estimated_rows, 1);
+
+        let preview = crate::inspect::preview_source(&tables[0], 5).unwrap();
+        assert_eq!(preview.rows, vec![vec!["张三", "12"]]);
+    }
+
+    #[test]
+    fn xlsx_content_is_detected_even_with_xls_extension() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("扩展名不准.xls");
+        let mut workbook = rust_xlsxwriter::Workbook::new();
+        let worksheet = workbook.add_worksheet();
+        worksheet.write_string(0, 0, "姓名").unwrap();
+        worksheet.write_string(1, 0, "李四").unwrap();
+        workbook.save(&path).unwrap();
+
+        let (tables, warnings) = scan_file(&path).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(tables[0].headers, vec!["姓名"]);
+        let preview = crate::inspect::preview_source(&tables[0], 5).unwrap();
+        assert_eq!(preview.rows, vec![vec!["李四"]]);
+    }
+
+    #[test]
+    fn spreadsheet_xml_with_xlsx_extension_is_supported_as_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("XML导出.xlsx");
+        std::fs::write(
+            &path,
+            r#"<?xml version="1.0"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Worksheet ss:Name="2025"><Table>
+  <Row><Cell><Data ss:Type="String">姓名</Data></Cell><Cell><Data ss:Type="String">部门</Data></Cell><Cell><Data ss:Type="String">说明</Data></Cell></Row>
+  <Row><Cell><Data ss:Type="String">王五</Data></Cell><Cell ss:Index="3"><Data ss:Type="String">审计&amp;财务</Data></Cell></Row>
+ </Table></Worksheet>
+</Workbook>"#,
+        )
+        .unwrap();
+
+        let (tables, warnings) = scan_file(&path).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(tables[0].sheet_name, "2025");
+        assert_eq!(tables[0].headers, vec!["姓名", "部门", "说明"]);
+        let preview = crate::inspect::preview_source(&tables[0], 5).unwrap();
+        assert_eq!(preview.rows, vec![vec!["王五", "", "审计&财务"]]);
+    }
+
+    #[test]
+    fn truncated_xlsx_has_a_clear_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("未完成.xlsx");
+        let mut workbook = rust_xlsxwriter::Workbook::new();
+        workbook.add_worksheet().write_string(0, 0, "姓名").unwrap();
+        workbook.save(&path).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.truncate(bytes.len() - 64);
+        std::fs::write(&path, bytes).unwrap();
+
+        let error = scan_file(&path).unwrap_err().to_string();
+        assert!(error.contains("XLSX 文件不完整"), "{error}");
     }
 
     #[test]

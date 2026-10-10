@@ -3,15 +3,16 @@ use crate::model::{
     build_output_plan, header_key, source_to_output_map, MergeMode, MergeOptions, OutputPlan,
     SourceKind, SourceTable, TransformOp,
 };
-use crate::scan::{for_each_csv_row, for_each_xlsx_row, is_xlsx_path};
+use crate::scan::{
+    for_each_csv_row, for_each_xlsx_row, is_markup_workbook, is_xlsx_path, open_detected_workbook,
+    open_xlsx_workbook, read_markup_workbook,
+};
 use anyhow::{anyhow, Context, Result};
-use calamine::{open_workbook, open_workbook_auto, Data, Reader, Xlsx};
+use calamine::{open_workbook_auto, Data, Reader};
 use rust_xlsxwriter::{Color, ExcelDateTime, Format, FormatAlign, FormatBorder, Workbook};
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -300,60 +301,165 @@ fn merge_appended<S: RowSink>(
                     .map(|(index, candidate)| (index, *candidate))
                     .collect::<Vec<_>>();
                 if is_xlsx_path(&table.path) {
-                    let mut workbook: Xlsx<BufReader<File>> = open_workbook(&table.path)
-                        .with_context(|| format!("无法打开 {}", table.path.display()))?;
-                    for (sheet_index, sheet) in same_file {
-                        for_each_xlsx_row(
-                            &mut workbook,
-                            &sheet.sheet_name,
-                            sheet.header_row + sheet.header_rows - 1,
-                            None,
-                            |row| {
-                                consume_append_row(
-                                    sheet,
-                                    row.iter().map(CellValue::from_calamine).collect(),
-                                    &row_mappings[sheet_index],
-                                    options,
-                                    plan,
-                                    &mut dedup,
-                                    sink,
-                                    &mut current,
-                                    total,
-                                    emit,
-                                    cancel,
+                    match open_xlsx_workbook(&table.path) {
+                        Ok(mut workbook) => {
+                            for &(sheet_index, sheet) in &same_file {
+                                for_each_xlsx_row(
+                                    &mut workbook,
+                                    &sheet.sheet_name,
+                                    sheet.header_row + sheet.header_rows - 1,
+                                    None,
+                                    |row| {
+                                        consume_append_row(
+                                            sheet,
+                                            row.iter().map(CellValue::from_calamine).collect(),
+                                            &row_mappings[sheet_index],
+                                            options,
+                                            plan,
+                                            &mut dedup,
+                                            sink,
+                                            &mut current,
+                                            total,
+                                            emit,
+                                            cancel,
+                                        )
+                                    },
                                 )
-                            },
+                                .with_context(|| format!("处理 {} 时失败", sheet.display_name()))?;
+                            }
+                        }
+                        Err(primary_error) => merge_fallback_workbook(
+                            &table.path,
+                            &same_file,
+                            row_mappings,
+                            options,
+                            plan,
+                            &mut dedup,
+                            sink,
+                            &mut current,
+                            total,
+                            emit,
+                            cancel,
                         )
-                        .with_context(|| format!("处理 {} 时失败", sheet.display_name()))?;
+                        .with_context(|| format!("常规 XLSX 读取失败：{primary_error:#}"))?,
                     }
                 } else {
-                    let mut workbook = open_workbook_auto(&table.path)
-                        .with_context(|| format!("无法打开 {}", table.path.display()))?;
-                    for (sheet_index, sheet) in same_file {
-                        let range = workbook
-                            .worksheet_range(&sheet.sheet_name)
-                            .with_context(|| format!("无法读取 {}", sheet.display_name()))?;
-                        for row in range.rows().skip(sheet.header_row + sheet.header_rows - 1) {
-                            consume_append_row(
-                                sheet,
-                                row.iter().map(CellValue::from_calamine).collect(),
-                                &row_mappings[sheet_index],
-                                options,
-                                plan,
-                                &mut dedup,
-                                sink,
-                                &mut current,
-                                total,
-                                emit,
-                                cancel,
-                            )?;
+                    match open_workbook_auto(&table.path) {
+                        Ok(mut workbook) => {
+                            for &(sheet_index, sheet) in &same_file {
+                                let range =
+                                    workbook.worksheet_range(&sheet.sheet_name).with_context(
+                                        || format!("无法读取 {}", sheet.display_name()),
+                                    )?;
+                                for row in
+                                    range.rows().skip(sheet.header_row + sheet.header_rows - 1)
+                                {
+                                    consume_append_row(
+                                        sheet,
+                                        row.iter().map(CellValue::from_calamine).collect(),
+                                        &row_mappings[sheet_index],
+                                        options,
+                                        plan,
+                                        &mut dedup,
+                                        sink,
+                                        &mut current,
+                                        total,
+                                        emit,
+                                        cancel,
+                                    )?;
+                                }
+                            }
                         }
+                        Err(primary_error) => merge_fallback_workbook(
+                            &table.path,
+                            &same_file,
+                            row_mappings,
+                            options,
+                            plan,
+                            &mut dedup,
+                            sink,
+                            &mut current,
+                            total,
+                            emit,
+                            cancel,
+                        )
+                        .with_context(|| format!("常规读取失败：{primary_error}"))?,
                     }
                 }
             }
         }
     }
     Ok(Some(current))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn merge_fallback_workbook<S: RowSink>(
+    path: &Path,
+    sheets: &[(usize, &SourceTable)],
+    row_mappings: &[RowMapping],
+    options: &MergeOptions,
+    plan: &OutputPlan,
+    dedup: &mut HashSet<Vec<String>>,
+    sink: &mut S,
+    current: &mut u64,
+    total: u64,
+    emit: &dyn Fn(u64, u64, String),
+    cancel: &AtomicBool,
+) -> Result<()> {
+    if is_markup_workbook(path) {
+        let workbook =
+            read_markup_workbook(path).with_context(|| format!("无法打开 {}", path.display()))?;
+        for &(sheet_index, sheet) in sheets {
+            let source = workbook
+                .iter()
+                .find(|candidate| candidate.name == sheet.sheet_name)
+                .with_context(|| format!("无法读取 {}", sheet.display_name()))?;
+            for row in source
+                .rows
+                .iter()
+                .skip(sheet.header_row + sheet.header_rows - 1)
+            {
+                consume_append_row(
+                    sheet,
+                    row.iter().cloned().map(CellValue::from_text).collect(),
+                    &row_mappings[sheet_index],
+                    options,
+                    plan,
+                    dedup,
+                    sink,
+                    current,
+                    total,
+                    emit,
+                    cancel,
+                )?;
+            }
+        }
+        return Ok(());
+    }
+
+    let mut workbook =
+        open_detected_workbook(path).with_context(|| format!("无法打开 {}", path.display()))?;
+    for &(sheet_index, sheet) in sheets {
+        let range = workbook
+            .worksheet_range(&sheet.sheet_name)
+            .with_context(|| format!("无法读取 {}", sheet.display_name()))?;
+        for row in range.rows().skip(sheet.header_row + sheet.header_rows - 1) {
+            consume_append_row(
+                sheet,
+                row.iter().map(CellValue::from_calamine).collect(),
+                &row_mappings[sheet_index],
+                options,
+                plan,
+                dedup,
+                sink,
+                current,
+                total,
+                emit,
+                cancel,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -658,6 +764,14 @@ impl CellValue {
             }
             Data::DateTimeIso(v) | Data::DurationIso(v) => Self::Text(v.clone()),
             Data::Error(v) => Self::Text(v.to_string()),
+        }
+    }
+
+    pub(crate) fn from_text(value: String) -> Self {
+        if value.trim().is_empty() {
+            Self::Empty
+        } else {
+            Self::Text(value)
         }
     }
 }

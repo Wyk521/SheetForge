@@ -1,13 +1,14 @@
 use crate::merge::{preview_mapped_row, CellValue};
 use crate::model::{build_output_plan, header_key, MergeOptions, SourceKind, SourceTable};
-use crate::scan::{decode_csv_field, for_each_xlsx_row, is_xlsx_path};
+use crate::scan::{
+    decode_csv_field, for_each_xlsx_row, is_markup_workbook, is_xlsx_path, open_detected_workbook,
+    open_xlsx_workbook, read_markup_workbook,
+};
 use anyhow::{Context, Result};
-use calamine::{open_workbook, open_workbook_auto, Data, Reader, Xlsx};
+use calamine::{open_workbook_auto, Data, Reader};
 use csv::{ByteRecord, ReaderBuilder};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::BufReader;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PreviewTable {
@@ -59,31 +60,45 @@ pub fn preview_source(table: &SourceTable, limit: usize) -> Result<PreviewTable>
         }
         SourceKind::Workbook => {
             if is_xlsx_path(&table.path) {
-                let mut workbook: Xlsx<BufReader<File>> = open_workbook(&table.path)?;
-                for_each_xlsx_row(
-                    &mut workbook,
-                    &table.sheet_name,
-                    table.header_row + table.header_rows - 1,
-                    Some(limit),
-                    |row| {
-                        let mut values = vec![String::new(); table.headers.len()];
-                        for (index, value) in row.iter().enumerate().take(values.len()) {
-                            values[index] = value.to_string();
-                        }
-                        rows.push(values);
-                        Ok(())
-                    },
-                )?;
+                match open_xlsx_workbook(&table.path) {
+                    Ok(mut workbook) => {
+                        for_each_xlsx_row(
+                            &mut workbook,
+                            &table.sheet_name,
+                            table.header_row + table.header_rows - 1,
+                            Some(limit),
+                            |row| {
+                                let mut values = vec![String::new(); table.headers.len()];
+                                for (index, value) in row.iter().enumerate().take(values.len()) {
+                                    values[index] = value.to_string();
+                                }
+                                rows.push(values);
+                                Ok(())
+                            },
+                        )?;
+                    }
+                    Err(primary_error) => rows.extend(
+                        fallback_workbook_text_rows(table, limit)
+                            .with_context(|| format!("常规 XLSX 读取失败：{primary_error:#}"))?,
+                    ),
+                }
             } else {
-                let mut workbook = open_workbook_auto(&table.path)?;
-                let range = workbook.worksheet_range(&table.sheet_name)?;
-                rows.extend(
-                    range
-                        .rows()
-                        .skip(table.header_row + table.header_rows - 1)
-                        .take(limit)
-                        .map(|row| row.iter().map(Data::to_string).collect()),
-                );
+                match open_workbook_auto(&table.path) {
+                    Ok(mut workbook) => {
+                        let range = workbook.worksheet_range(&table.sheet_name)?;
+                        rows.extend(
+                            range
+                                .rows()
+                                .skip(table.header_row + table.header_rows - 1)
+                                .take(limit)
+                                .map(|row| row.iter().map(Data::to_string).collect()),
+                        );
+                    }
+                    Err(primary_error) => rows.extend(
+                        fallback_workbook_text_rows(table, limit)
+                            .with_context(|| format!("常规读取失败：{primary_error}"))?,
+                    ),
+                }
             }
         }
     }
@@ -149,31 +164,75 @@ fn preview_source_values(table: &SourceTable, limit: usize) -> Result<Vec<Vec<Ce
         }
         SourceKind::Workbook => {
             if is_xlsx_path(&table.path) {
-                let mut workbook: Xlsx<BufReader<File>> = open_workbook(&table.path)?;
-                for_each_xlsx_row(
-                    &mut workbook,
-                    &table.sheet_name,
-                    table.header_row + table.header_rows - 1,
-                    Some(limit),
-                    |row| {
-                        rows.push(row.iter().map(CellValue::from_calamine).collect());
-                        Ok(())
-                    },
-                )?;
+                match open_xlsx_workbook(&table.path) {
+                    Ok(mut workbook) => {
+                        for_each_xlsx_row(
+                            &mut workbook,
+                            &table.sheet_name,
+                            table.header_row + table.header_rows - 1,
+                            Some(limit),
+                            |row| {
+                                rows.push(row.iter().map(CellValue::from_calamine).collect());
+                                Ok(())
+                            },
+                        )?;
+                    }
+                    Err(primary_error) => rows.extend(
+                        fallback_workbook_text_rows(table, limit)
+                            .with_context(|| format!("常规 XLSX 读取失败：{primary_error:#}"))?
+                            .into_iter()
+                            .map(|row| row.into_iter().map(CellValue::from_text).collect()),
+                    ),
+                }
             } else {
-                let mut workbook = open_workbook_auto(&table.path)?;
-                let range = workbook.worksheet_range(&table.sheet_name)?;
-                rows.extend(
-                    range
-                        .rows()
-                        .skip(table.header_row + table.header_rows - 1)
-                        .take(limit)
-                        .map(|row| row.iter().map(CellValue::from_calamine).collect()),
-                );
+                match open_workbook_auto(&table.path) {
+                    Ok(mut workbook) => {
+                        let range = workbook.worksheet_range(&table.sheet_name)?;
+                        rows.extend(
+                            range
+                                .rows()
+                                .skip(table.header_row + table.header_rows - 1)
+                                .take(limit)
+                                .map(|row| row.iter().map(CellValue::from_calamine).collect()),
+                        );
+                    }
+                    Err(primary_error) => rows.extend(
+                        fallback_workbook_text_rows(table, limit)
+                            .with_context(|| format!("常规读取失败：{primary_error}"))?
+                            .into_iter()
+                            .map(|row| row.into_iter().map(CellValue::from_text).collect()),
+                    ),
+                }
             }
         }
     }
     Ok(rows)
+}
+
+fn fallback_workbook_text_rows(table: &SourceTable, limit: usize) -> Result<Vec<Vec<String>>> {
+    if is_markup_workbook(&table.path) {
+        let sheets = read_markup_workbook(&table.path)?;
+        let sheet = sheets
+            .iter()
+            .find(|sheet| sheet.name == table.sheet_name)
+            .with_context(|| format!("无法读取工作表 {}", table.sheet_name))?;
+        return Ok(sheet
+            .rows
+            .iter()
+            .skip(table.header_row + table.header_rows - 1)
+            .take(limit)
+            .cloned()
+            .collect());
+    }
+
+    let mut workbook = open_detected_workbook(&table.path)?;
+    let range = workbook.worksheet_range(&table.sheet_name)?;
+    Ok(range
+        .rows()
+        .skip(table.header_row + table.header_rows - 1)
+        .take(limit)
+        .map(|row| row.iter().map(Data::to_string).collect())
+        .collect())
 }
 
 pub fn preflight_for_destination(

@@ -191,12 +191,13 @@ const filteredGroups = computed(() => {
 }
 
 .sf-source-preview-list {
+  display: grid;
+  row-gap: var(--space-xs);
   min-width: 0;
   padding: var(--space-xs) var(--space-lg);
 }
 
 .sf-source-preview-count {
-  margin-bottom: var(--space-2xs);
   color: var(--sf-text-muted);
   font-size: var(--text-2xs);
 }
@@ -206,7 +207,7 @@ const filteredGroups = computed(() => {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-xs);
-  min-height: 2rem;
+  min-height: 2.25rem;
   min-width: 0;
 }
 

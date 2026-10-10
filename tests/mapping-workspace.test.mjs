@@ -100,6 +100,8 @@ test("默认窗口宽度下映射区保持可见并为源表操作保留空间",
   assert.match(fieldBatch, /sf-field-table-wrap/);
   assert.match(fieldBatch, /sf-source-preview-action/);
   assert.match(fieldBatch, /title="预览源表"/);
+  assert.match(fieldBatch, /row-gap: var\(--space-xs\)/);
+  assert.match(fieldBatch, /min-height: 2\.25rem/);
 });
 
 test("页面切换保持视图挂载，避免重复创建大型表格", async () => {

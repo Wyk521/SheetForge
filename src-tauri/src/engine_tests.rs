@@ -93,6 +93,24 @@ fn csv_bom_and_gbk_are_decoded_and_merged() {
 }
 
 #[test]
+fn html_export_with_xls_extension_scans_and_merges() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("网页导出.xls");
+    std::fs::write(
+        &path,
+        "\n\n<!DOCTYPE html><html><body><table><tr><th>姓名</th><th>金额</th></tr><tr><td>张三</td><td>100</td></tr><tr><td>李四</td><td>200</td></tr></table></body></html>",
+    )
+    .unwrap();
+    let (tables, warnings) = scan_file(&path).unwrap();
+    assert!(warnings.is_empty());
+
+    let rows = merge_and_read(tables, MergeOptions::default());
+    assert_eq!(rows[0], vec!["姓名", "金额"]);
+    assert_eq!(rows[1], vec!["张三", "100"]);
+    assert_eq!(rows[2], vec!["李四", "200"]);
+}
+
+#[test]
 fn long_numbers_and_leading_zeros_stay_text() {
     let dir = tempfile::tempdir().unwrap();
     let table = scan_csv(
