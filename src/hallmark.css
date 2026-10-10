@@ -29,7 +29,7 @@ textarea {
 
 button:focus-visible,
 a:focus-visible,
-[tabindex]:focus-visible {
+[tabindex]:not(input):not(select):not(textarea):focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
@@ -641,8 +641,6 @@ a:focus-visible,
   border-radius: var(--radius-control);
   background: var(--color-paper);
   box-shadow: 0 0 0 1px var(--color-rule-strong) inset;
-  outline: 2px solid transparent;
-  outline-offset: 1px;
   transition: box-shadow var(--dur-micro) var(--ease-out);
 }
 
@@ -650,7 +648,6 @@ a:focus-visible,
 .el-select__wrapper.is-focused,
 .el-textarea__inner:focus {
   box-shadow: 0 0 0 2px var(--color-focus) inset;
-  outline-color: var(--color-focus);
 }
 
 .el-input.is-disabled .el-input__wrapper,
