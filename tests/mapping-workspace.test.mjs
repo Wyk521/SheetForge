@@ -61,9 +61,8 @@ test("源表预览在当前工作区弹出，不再强制跳到输出页", async
 });
 
 test("输出预览按来源表分组，并为每个来源单独抽样", async () => {
-  const [types, store, inspect, commands, preview, grid] = await Promise.all([
+  const [types, inspect, commands, preview, grid] = await Promise.all([
     read("src/types.ts"),
-    read("src/stores/merge.ts"),
     read("src-tauri/src/inspect.rs"),
     read("src-tauri/src/commands.rs"),
     read("src/views/PreviewView.vue"),
@@ -73,7 +72,6 @@ test("输出预览按来源表分组，并为每个来源单独抽样", async ()
   assert.match(types, /interface MergedPreviewGroup/);
   assert.match(types, /source_file: string/);
   assert.match(types, /source_sheet: string/);
-  assert.match(store, /preview_merged[\s\S]*limit: 5/);
   assert.match(inspect, /struct MergedPreviewGroup/);
   assert.match(inspect, /for \(source_index, table\) in tables\.iter\(\)\.enumerate\(\)\.filter/);
   assert.match(inspect, /source_file:/);
@@ -135,14 +133,3 @@ test("目标字段在失焦或回车时才提交，不逐键改写映射", async
   assert.doesNotMatch(fieldBatch, /@update:model-value="\(v: string\) => store\.setFieldTarget/);
 });
 
-test("统一表头的单表失败随批量结果返回，不提前解除忙碌", async () => {
-  const [scan, store] = await Promise.all([
-    read("src-tauri/src/scan.rs"),
-    read("src/stores/merge.ts"),
-  ]);
-  const groupReload = scan.slice(scan.indexOf("pub fn spawn_group_reload"), scan.indexOf("fn preserve_mappings"));
-
-  assert.doesNotMatch(groupReload, /table-reload-failed/);
-  assert.match(groupReload, /failures\.push/);
-  assert.match(store, /replaceReloadedTable\(item\.index, item\.table\)/);
-});

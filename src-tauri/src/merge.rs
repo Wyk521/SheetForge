@@ -1,51 +1,30 @@
-use crate::inspect::{preflight_for_destination, CheckIssue};
-use crate::model::{
-    build_output_plan, header_key, source_to_output_map, MergeMode, MergeOptions, OutputPlan,
-    SourceKind, SourceTable, TransformOp,
-};
+//! Shared streaming merge pipeline. Output adapters consume the same mapped cells.
+mod row;
+mod tasks;
+mod xlsx;
+
+use crate::model::{build_output_plan, MergeOptions, OutputPlan, SourceKind, SourceTable};
 use crate::scan::{
     for_each_csv_row, for_each_xlsx_row, is_markup_workbook, is_xlsx_path, open_detected_workbook,
     open_xlsx_workbook, read_markup_workbook,
 };
 use anyhow::{anyhow, Context, Result};
-use calamine::{open_workbook_auto, Data, Reader};
-use rust_xlsxwriter::{Color, ExcelDateTime, Format, FormatAlign, FormatBorder, Workbook};
-use serde::Serialize;
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
-
-pub const XLSX_MAX_ROWS: u32 = 1_048_576;
-pub const XLSX_MAX_DATA_ROWS: u32 = XLSX_MAX_ROWS - 1;
-
-#[derive(Clone, Serialize)]
-pub struct MergeProgressDto {
-    pub current: u64,
-    pub total: u64,
-    pub label: String,
-}
-
-#[derive(Clone, Serialize)]
-pub struct MergeFinishedDto {
-    pub output: PathBuf,
-    pub rows: u64,
-    pub sheets: usize,
-    pub truncated_cells: u64,
-}
-
-#[derive(Clone, Serialize)]
-pub struct MergeFailedDto {
-    pub message: String,
-}
-
-#[derive(Clone, Serialize)]
-pub struct PreflightDoneDto {
-    pub issues: Vec<CheckIssue>,
-    pub continues_merge: bool,
-}
+use calamine::{open_workbook_auto, Reader};
+use row::{build_row_mapping, is_blank_source_row, mapped_row, passes_filter, row_key, RowMapping};
+pub(crate) use row::{preview_mapped_row, CellValue};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+};
+#[allow(unused_imports)]
+pub use tasks::{
+    spawn_merge, spawn_preflight, MergeFailedDto, MergeFinishedDto, MergeProgressDto,
+    PreflightDoneDto,
+};
+use xlsx::{finish_sink, XlsxSink};
+#[allow(unused_imports)]
+pub use xlsx::{XLSX_MAX_DATA_ROWS, XLSX_MAX_ROWS};
 
 /// 用户主动取消合并时的类型化错误，用于与真正的失败区分开。
 #[derive(Debug)]
@@ -62,75 +41,6 @@ impl std::error::Error for MergeCancelled {}
 /// 判断错误链是否来自用户取消，供 XLSX 与数据库两条导出路径共用。
 pub(crate) fn is_cancelled(error: &anyhow::Error) -> bool {
     error.downcast_ref::<MergeCancelled>().is_some()
-}
-
-pub fn spawn_merge(
-    tables: Vec<SourceTable>,
-    options: MergeOptions,
-    output: PathBuf,
-    app: AppHandle,
-    cancel: Arc<AtomicBool>,
-) {
-    std::thread::spawn(move || {
-        let emit_progress = |current: u64, total: u64, label: String| {
-            let _ = app.emit(
-                "merge-progress",
-                MergeProgressDto {
-                    current,
-                    total,
-                    label,
-                },
-            );
-        };
-        match merge_tables(&tables, &options, &output, &emit_progress, &cancel) {
-            Ok(Some(summary)) => {
-                let _ = app.emit(
-                    "merge-finished",
-                    MergeFinishedDto {
-                        output,
-                        rows: summary.rows,
-                        sheets: summary.sheets,
-                        truncated_cells: summary.truncated_cells,
-                    },
-                );
-            }
-            Ok(None) => {
-                let _ = app.emit("merge-cancelled", ());
-            }
-            Err(error) => {
-                if is_cancelled(&error) {
-                    let _ = app.emit("merge-cancelled", ());
-                } else {
-                    let _ = app.emit(
-                        "merge-failed",
-                        MergeFailedDto {
-                            message: format!("{error:#}"),
-                        },
-                    );
-                }
-            }
-        }
-    });
-}
-
-/// 在后台线程执行合并前检查，避免大文件时冻结界面。
-pub fn spawn_preflight(
-    tables: Vec<SourceTable>,
-    options: MergeOptions,
-    continues_merge: bool,
-    database: bool,
-    app: AppHandle,
-) {
-    std::thread::spawn(move || {
-        let issues = preflight_for_destination(&tables, &options, database);
-        let _ = app.emit(
-            "preflight-done",
-            PreflightDoneDto {
-                issues,
-                continues_merge,
-            },
-        );
-    });
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -498,281 +408,9 @@ fn consume_append_row<S: RowSink>(
     Ok(())
 }
 
-fn is_blank_source_row(kind: SourceKind, values: &[CellValue]) -> bool {
-    match kind {
-        SourceKind::Csv { .. } => values.iter().all(CellValue::is_empty),
-        SourceKind::Workbook => values.iter().all(|value| matches!(value, CellValue::Empty)),
-    }
-}
-
-struct RowMapping {
-    /// (源列、输出列、转换操作、是否可以从输入行直接移动值)。
-    columns: Vec<(usize, usize, TransformOp, bool)>,
-    source_file: Option<String>,
-    source_sheet: Option<String>,
-}
-
-fn build_row_mapping(table: &SourceTable, plan: &OutputPlan, mode: MergeMode) -> RowMapping {
-    let columns = source_to_output_map(table, plan, mode);
-    let mut source_use_count = HashMap::<usize, usize>::new();
-    for (source_index, _) in &columns {
-        *source_use_count.entry(*source_index).or_default() += 1;
-    }
-
-    // 与 mapped_row 之前的 find 语义保持一致：重复 source_index 时取第一条规则。
-    // 列名交集直接使用原始表头和原值，不应用「修正表头」中设置的清洗。
-    let mut transforms = vec![None; table.headers.len()];
-    let mappings = match mode {
-        MergeMode::Manual => table.mappings.as_slice(),
-        MergeMode::Intersection => &[],
-    };
-    for mapping in mappings {
-        if let Some(transform) = transforms.get_mut(mapping.source_index) {
-            if transform.is_none() {
-                *transform = Some(mapping.transform);
-            }
-        }
-    }
-
-    let columns = columns
-        .into_iter()
-        .map(|(source_index, output_index)| {
-            let transform = transforms
-                .get(source_index)
-                .and_then(|value| *value)
-                .unwrap_or(TransformOp::None);
-            let can_move = transform == TransformOp::None
-                && source_use_count.get(&source_index).copied() == Some(1);
-            (source_index, output_index, transform, can_move)
-        })
-        .collect();
-
-    RowMapping {
-        columns,
-        source_file: plan.source_file_column.map(|_| {
-            table
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        }),
-        source_sheet: plan.source_sheet_column.map(|_| table.sheet_name.clone()),
-    }
-}
-
-fn mapped_row(
-    values: Vec<CellValue>,
-    row_mapping: &RowMapping,
-    plan: &OutputPlan,
-) -> Vec<CellValue> {
-    let mut values = values;
-    let mut output = vec![CellValue::Empty; plan.headers.len()];
-    for &(source_index, output_index, transform, can_move) in &row_mapping.columns {
-        if source_index < values.len() {
-            let value = if can_move {
-                std::mem::replace(&mut values[source_index], CellValue::Empty)
-            } else {
-                values[source_index].transformed(transform)
-            };
-            if output[output_index].is_empty() && !value.is_empty() {
-                output[output_index] = value;
-            }
-        }
-    }
-    if let Some(index) = plan.source_file_column {
-        output[index] = CellValue::Text(row_mapping.source_file.clone().unwrap_or_default());
-    }
-    if let Some(index) = plan.source_sheet_column {
-        output[index] = CellValue::Text(row_mapping.source_sheet.clone().unwrap_or_default());
-    }
-    output
-}
-
-pub(crate) fn preview_mapped_row(
-    source: Vec<CellValue>,
-    table: &SourceTable,
-    plan: &OutputPlan,
-    options: &MergeOptions,
-) -> Option<Vec<String>> {
-    if is_blank_source_row(table.kind, &source) {
-        return None;
-    }
-    let mapping = build_row_mapping(table, plan, options.mode);
-    let output = mapped_row(source, &mapping, plan);
-    passes_filter(&output, plan, options).then(|| row_key(&output))
-}
-
-fn row_key(row: &[CellValue]) -> Vec<String> {
-    row.iter().map(CellValue::as_text).collect()
-}
-
-fn passes_filter(row: &[CellValue], plan: &OutputPlan, options: &MergeOptions) -> bool {
-    if options.filter_text.is_empty() {
-        return true;
-    }
-    let Some(index) = plan
-        .headers
-        .iter()
-        .position(|header| header_key(header) == header_key(&options.filter_column))
-    else {
-        return true;
-    };
-    let contains = row
-        .get(index)
-        .map(CellValue::as_text)
-        .unwrap_or_default()
-        .to_lowercase()
-        .contains(&options.filter_text.to_lowercase());
-    if options.filter_exclude {
-        !contains
-    } else {
-        contains
-    }
-}
-
 fn send_progress(current: u64, total: u64, label: String, emit: &dyn Fn(u64, u64, String)) {
     if current.is_multiple_of(1_000) || current == total {
         emit(current, total, format!("正在处理：{label}"));
-    }
-}
-
-fn finish_sink(
-    sink: XlsxSink,
-    output: &Path,
-    rows: u64,
-    cancel: &AtomicBool,
-) -> Result<Option<MergeSummary>> {
-    if cancel.load(Ordering::Relaxed) {
-        return Ok(None);
-    }
-    let summary = MergeSummary {
-        rows,
-        sheets: sink.sheet_count(),
-        truncated_cells: sink.truncated_cells,
-    };
-    sink.save(output)?;
-    Ok(Some(summary))
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum CellValue {
-    Empty,
-    Text(String),
-    Integer(i64),
-    Number(f64),
-    Boolean(bool),
-    /// Excel 日期/时间，由源文件解析出的年月日时分秒组成。
-    DateTime {
-        year: u16,
-        month: u8,
-        day: u8,
-        hour: u8,
-        minute: u8,
-        second: u8,
-    },
-    /// 仅含时间的单元格（Excel 序列值小于 1），如 08:30。
-    Time {
-        hour: u8,
-        minute: u8,
-        second: u8,
-    },
-}
-
-impl CellValue {
-    fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty) || matches!(self, Self::Text(value) if value.is_empty())
-    }
-    pub(crate) fn copy_text(&self, empty_as_null: bool) -> Option<Cow<'_, str>> {
-        match self {
-            Self::Empty => None,
-            Self::Text(v) if empty_as_null && v.is_empty() => None,
-            Self::Text(v) => Some(Cow::Borrowed(v)),
-            Self::Integer(v) => Some(Cow::Owned(v.to_string())),
-            Self::Number(v) => Some(Cow::Owned(v.to_string())),
-            Self::Boolean(v) => Some(Cow::Owned(v.to_string())),
-            Self::DateTime {
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-            } if *hour == 0 && *minute == 0 && *second == 0 => {
-                Some(Cow::Owned(format!("{year:04}-{month:02}-{day:02}")))
-            }
-            Self::DateTime {
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-            } => Some(Cow::Owned(format!(
-                "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"
-            ))),
-            Self::Time {
-                hour,
-                minute,
-                second,
-            } => Some(Cow::Owned(format!("{hour:02}:{minute:02}:{second:02}"))),
-        }
-    }
-    fn as_text(&self) -> String {
-        self.copy_text(false)
-            .map(Cow::into_owned)
-            .unwrap_or_default()
-    }
-    fn transformed(&self, operation: TransformOp) -> Self {
-        // 去空格和大小写只对文本有意义；数字、布尔、日期保持原类型，
-        // 否则 XLSX 中会变成“以文本形式存储的数字”。
-        match self {
-            Self::Text(value) if operation != TransformOp::None => {
-                Self::Text(operation.apply(value))
-            }
-            other => other.clone(),
-        }
-    }
-    pub(crate) fn from_calamine(value: &Data) -> Self {
-        match value {
-            Data::Empty => Self::Empty,
-            Data::String(v) => Self::Text(v.clone()),
-            Data::Int(v) => Self::Integer(*v),
-            Data::Float(v) => Self::Number(*v),
-            Data::Bool(v) => Self::Boolean(*v),
-            Data::DateTime(v) => {
-                // 时长格式（如 [hh]:mm:ss）保持数值文本。
-                if v.is_duration() {
-                    Self::Text(v.as_f64().to_string())
-                } else {
-                    let (year, month, day, hour, minute, second, _millis) = v.to_ymd_hms_milli();
-                    if (0.0..1.0).contains(&v.as_f64()) {
-                        return Self::Time {
-                            hour,
-                            minute,
-                            second,
-                        };
-                    }
-                    Self::DateTime {
-                        year,
-                        month,
-                        day,
-                        hour,
-                        minute,
-                        second,
-                    }
-                }
-            }
-            Data::DateTimeIso(v) | Data::DurationIso(v) => Self::Text(v.clone()),
-            Data::Error(v) => Self::Text(v.to_string()),
-        }
-    }
-
-    pub(crate) fn from_text(value: String) -> Self {
-        if value.trim().is_empty() {
-            Self::Empty
-        } else {
-            Self::Text(value)
-        }
     }
 }
 
@@ -794,164 +432,12 @@ where
     }
 }
 
-struct XlsxSink {
-    workbook: Workbook,
-    plan: OutputPlan,
-    header_format: Format,
-    current_sheet: usize,
-    row_in_sheet: u32,
-    max_data_rows: u32,
-    truncated_cells: u64,
-}
-
-/// Excel 单元格最多容纳 32,767 个字符。
-const XLSX_MAX_CELL_CHARS: usize = 32_767;
-
-impl XlsxSink {
-    fn new(plan: OutputPlan) -> Result<Self> {
-        Self::new_with_limit(plan, XLSX_MAX_DATA_ROWS)
-    }
-    fn new_with_limit(plan: OutputPlan, max_data_rows: u32) -> Result<Self> {
-        if max_data_rows == 0 || max_data_rows > XLSX_MAX_DATA_ROWS {
-            return Err(anyhow!("无效的 Sheet 行数限制"));
-        }
-        let header_format = Format::new()
-            .set_bold()
-            .set_font_color(Color::White)
-            .set_background_color(Color::RGB(0x2563EB))
-            .set_align(FormatAlign::Center)
-            .set_border(FormatBorder::Thin);
-        let mut sink = Self {
-            workbook: Workbook::new(),
-            plan,
-            header_format,
-            current_sheet: 0,
-            row_in_sheet: 0,
-            max_data_rows,
-            truncated_cells: 0,
-        };
-        sink.add_sheet()?;
-        Ok(sink)
-    }
-    fn add_sheet(&mut self) -> Result<()> {
-        let index = self.workbook.worksheets().len();
-        let worksheet = self.workbook.add_worksheet_with_constant_memory();
-        worksheet.set_name(format!("合并结果_{:03}", index + 1))?;
-        worksheet.set_freeze_panes(1, 0)?;
-        for (column, header) in self.plan.headers.iter().enumerate() {
-            worksheet.write_with_format(0, column as u16, header, &self.header_format)?;
-            worksheet.set_column_width(column as u16, suggested_width(header))?;
-        }
-        self.current_sheet = index;
-        self.row_in_sheet = 0;
-        Ok(())
-    }
-    fn write_row(&mut self, values: &[CellValue]) -> Result<()> {
-        if self.row_in_sheet >= self.max_data_rows {
-            self.add_sheet()?;
-        }
-        let excel_row = self.row_in_sheet + 1;
-        let worksheet = self.workbook.worksheet_from_index(self.current_sheet)?;
-        for (column, value) in values.iter().enumerate() {
-            match value {
-                CellValue::Empty => {}
-                CellValue::Text(v) => {
-                    // 超长文本按 Excel 上限截断并计数，而不是让整次合并在末尾失败。
-                    match v.char_indices().nth(XLSX_MAX_CELL_CHARS) {
-                        Some((end, _)) => {
-                            worksheet.write_string(excel_row, column as u16, &v[..end])?;
-                            self.truncated_cells += 1;
-                        }
-                        None => {
-                            worksheet.write_string(excel_row, column as u16, v)?;
-                        }
-                    }
-                }
-                CellValue::Integer(v) => {
-                    // f64 只能精确表示 2^53 以内的整数；超出的整数值（如 18 位
-                    // 编号）以文本写出，避免尾数被静默截断。
-                    if (*v as f64) as i64 == *v {
-                        worksheet.write_number(excel_row, column as u16, *v as f64)?;
-                    } else {
-                        worksheet.write_string(excel_row, column as u16, v.to_string())?;
-                    }
-                }
-                CellValue::Number(v) => {
-                    worksheet.write_number(excel_row, column as u16, *v)?;
-                }
-                CellValue::Boolean(v) => {
-                    worksheet.write_boolean(excel_row, column as u16, *v)?;
-                }
-                CellValue::DateTime {
-                    year,
-                    month,
-                    day,
-                    hour,
-                    minute,
-                    second,
-                } => {
-                    let datetime = ExcelDateTime::from_ymd(*year, *month, *day)?.and_hms(
-                        *hour as u16,
-                        *minute,
-                        *second,
-                    )?;
-                    let format = if *hour == 0 && *minute == 0 && *second == 0 {
-                        Format::new().set_num_format("yyyy-mm-dd")
-                    } else {
-                        Format::new().set_num_format("yyyy-mm-dd hh:mm:ss")
-                    };
-                    worksheet.write_datetime_with_format(
-                        excel_row,
-                        column as u16,
-                        &datetime,
-                        &format,
-                    )?;
-                }
-                CellValue::Time {
-                    hour,
-                    minute,
-                    second,
-                } => {
-                    let time = ExcelDateTime::from_hms(*hour as u16, *minute, *second)?;
-                    worksheet.write_datetime_with_format(
-                        excel_row,
-                        column as u16,
-                        &time,
-                        &Format::new().set_num_format("hh:mm:ss"),
-                    )?;
-                }
-            }
-        }
-        self.row_in_sheet += 1;
-        Ok(())
-    }
-    fn sheet_count(&self) -> usize {
-        self.current_sheet + 1
-    }
-    fn save(mut self, output: &Path) -> Result<()> {
-        self.workbook
-            .save(output)
-            .with_context(|| format!("无法写入 {}，请确认文件未被 Excel 占用", output.display()))
-    }
-}
-
-impl RowSink for XlsxSink {
-    fn write_row(&mut self, values: &[CellValue]) -> Result<()> {
-        XlsxSink::write_row(self, values)
-    }
-}
-
-fn suggested_width(header: &str) -> f64 {
-    let units: usize = header
-        .chars()
-        .map(|ch| if ch.is_ascii() { 1 } else { 2 })
-        .sum();
-    (units as f64 + 4.0).clamp(12.0, 32.0)
-}
-
 #[cfg(test)]
 mod tests {
+    use super::xlsx::{suggested_width, XLSX_MAX_DATA_ROWS};
     use super::*;
+    use crate::model::{MergeMode, TransformOp};
+    use calamine::Data;
     #[test]
     fn data_capacity_reserves_header() {
         assert_eq!(XLSX_MAX_DATA_ROWS, 1_048_575);

@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { save } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../native";
 import { useMergeStore } from "../stores/merge";
 import MergedPreviewGrid from "../components/MergedPreviewGrid.vue";
 

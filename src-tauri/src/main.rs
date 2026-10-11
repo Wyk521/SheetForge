@@ -8,6 +8,8 @@ mod engine_tests;
 mod inspect;
 mod merge;
 mod model;
+#[cfg(test)]
+mod performance_tests;
 mod pg_import;
 mod scan;
 mod updater;

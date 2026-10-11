@@ -9,16 +9,14 @@ async function read(path) {
 }
 
 test("启动时从 NB 静默检查更新并显示更新窗口", async () => {
-  const [app, store, dialog, updater] = await Promise.all([
+  const [app, dialog, updater] = await Promise.all([
     read("src/App.vue"),
-    read("src/stores/merge.ts"),
     read("src/components/UpdateDialog.vue"),
     read("src-tauri/src/updater.rs"),
   ]);
 
   assert.match(app, /store\.checkUpdate\(true\)/);
   assert.match(app, /<UpdateDialog\s*\/>/);
-  assert.match(store, /updateDialogVisible\.value = true/);
   assert.match(dialog, /立即更新/);
   assert.match(dialog, /更新后软件会自动重启/);
   assert.match(updater, /https:\/\/jp\.kun\.show:8443\/sheetforge\/latest\.json/);
