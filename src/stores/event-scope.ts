@@ -1,4 +1,5 @@
 import { listen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
+import type { NativeEvents, NativeOn } from "../native";
 
 /** Owns native subscriptions, including registrations finishing after disposal. */
 export function createEventScope() {
@@ -12,13 +13,13 @@ export function createEventScope() {
     for (const unlisten of unlisteners.splice(0)) unlisten();
   }
 
-  function init(register: (on: <T>(name: string, callback: EventCallback<T>) => Promise<void>) => Promise<void>) {
+  function init(register: (on: NativeOn) => Promise<void>) {
     if (ready) return ready;
     const current = generation;
     ready = (async () => {
-      await register(async <T>(name: string, callback: EventCallback<T>) => {
+      await register(async <K extends keyof NativeEvents>(name: K, callback: EventCallback<NativeEvents[K]>) => {
         if (current !== generation) return;
-        const unlisten = await listen<T>(name, callback);
+        const unlisten = await listen<NativeEvents[K]>(name, callback);
         if (current !== generation) unlisten();
         else unlisteners.push(unlisten);
       });
