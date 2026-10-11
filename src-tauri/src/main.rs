@@ -5,11 +5,11 @@ mod config;
 mod database;
 #[cfg(test)]
 mod engine_tests;
-#[cfg(test)]
-mod performance_tests;
 mod inspect;
 mod merge;
 mod model;
+#[cfg(test)]
+mod performance_tests;
 mod pg_import;
 mod scan;
 mod updater;
