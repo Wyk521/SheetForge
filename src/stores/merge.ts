@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, onScopeDispose } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { createEventScope } from "./event-scope";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
@@ -234,15 +234,20 @@ export const useMergeStore = defineStore("merge", () => {
     return result;
   }
 
+  let planRequest = 0;
   async function refreshPlan() {
+    const request = ++planRequest;
+    clearMergedPreview();
+    checkIssues.value = [];
+    checkRan.value = false;
     try {
       const plan = await invoke<{ headers: string[] }>("get_plan", {
         tables: sources.value,
         options: options.value,
       });
-      planHeaders.value = plan.headers;
+      if (request === planRequest) planHeaders.value = plan.headers;
     } catch (error) {
-      planHeaders.value = [];
+      if (request === planRequest) planHeaders.value = [];
     }
   }
 
@@ -490,7 +495,7 @@ export const useMergeStore = defineStore("merge", () => {
     void refreshPlan();
   }
 
-  function applyGroupHeader(path: string) {
+  async function applyGroupHeader(path: string) {
     const group = sources.value
       .map((table, index) => ({ index, table }))
       .filter((item) => item.table.path === path);
@@ -499,19 +504,31 @@ export const useMergeStore = defineStore("merge", () => {
     const headerRows = group[0].table.header_rows;
     phase.value = "scanning";
     progressLabel.value = `正在把从第 ${headerRow} 行开始、占用 ${headerRows} 行的表头设置应用到整本工作簿…`;
-    void invoke("reload_group", {
-      sources: group.map((item) => ({ index: item.index, table: item.table })),
-      headerRow,
-      headerRows,
-    });
+    try {
+      await invoke("reload_group", {
+        sources: group.map((item) => ({ index: item.index, table: item.table })),
+        headerRow,
+        headerRows,
+      });
+    } catch (error) {
+      phase.value = "ready";
+      progressLabel.value = "";
+      ElMessage.error(String(error));
+    }
   }
 
-  function reloadTable(index: number, headerRow: number, headerRows: number) {
+  async function reloadTable(index: number, headerRow: number, headerRows: number) {
     const table = sources.value[index];
     if (!table) return;
     phase.value = "scanning";
     progressLabel.value = `正在从第 ${headerRow} 行开始、读取 ${headerRows} 行表头：${displayName(table)}`;
-    void invoke("reload_table", { index, table, headerRow, headerRows });
+    try {
+      await invoke("reload_table", { index, table, headerRow, headerRows });
+    } catch (error) {
+      phase.value = "ready";
+      progressLabel.value = "";
+      ElMessage.error(String(error));
+    }
   }
 
   // ---- 合并规则 ----
@@ -668,12 +685,18 @@ export const useMergeStore = defineStore("merge", () => {
     phase.value = "checking";
     progress.value = 0;
     progressLabel.value = "正在执行处理前检查…";
-    await invoke("run_preflight", {
-      tables: sources.value,
-      options: options.value,
-      continuesMerge,
-      destination: outputDestination.value,
-    });
+    try {
+      await invoke("run_preflight", {
+        tables: sources.value,
+        options: options.value,
+        continuesMerge,
+        destination: outputDestination.value,
+      });
+    } catch (error) {
+      phase.value = "ready";
+      progressLabel.value = "";
+      ElMessage.error(String(error));
+    }
   }
 
   async function confirmMerge() {
@@ -824,15 +847,17 @@ export const useMergeStore = defineStore("merge", () => {
   }
 
   // ---- 事件桥（启动时调用一次） ----
-  let unlisteners: UnlistenFn[] = [];
+  const eventScope = createEventScope();
+  const disposeEvents = eventScope.dispose;
+  onScopeDispose(disposeEvents);
 
-  async function initEvents() {
-    unlisteners.push(
-      await listen<ScanProgress>("scan-progress", (e) => {
+  function initEvents() {
+    return eventScope.init(async (on) => {
+      await on<ScanProgress>("scan-progress", (e) => {
         progress.value = e.payload.total === 0 ? 0 : e.payload.done / e.payload.total;
         progressLabel.value = `正在扫描：${e.payload.name}`;
-      }),
-      await listen<ScanFinished>("scan-finished", (e) => {
+      });
+      await on<ScanFinished>("scan-finished", (e) => {
         const appended = scanAppend.value;
         scanAppend.value = false;
         if (appended) {
@@ -849,12 +874,12 @@ export const useMergeStore = defineStore("merge", () => {
         progress.value = 1;
         progressLabel.value = `已识别 ${sources.value.length} 个数据表`;
         void refreshPlan();
-      }),
-      await listen<{ message: string }>("scan-failed", (e) => {
+      });
+      await on<{ message: string }>("scan-failed", (e) => {
         phase.value = "ready";
         ElMessage.error(e.payload.message);
-      }),
-      await listen<TableReloaded>("table-reloaded", (e) => {
+      });
+      await on<TableReloaded>("table-reloaded", (e) => {
         replaceReloadedTable(e.payload.index, e.payload.table);
         clearMergedPreview();
         closeSourcePreview();
@@ -863,8 +888,8 @@ export const useMergeStore = defineStore("merge", () => {
         phase.value = "ready";
         progressLabel.value = `表头已刷新：${displayName(e.payload.table)}`;
         void refreshPlan();
-      }),
-      await listen<TablesReloaded>("tables-reloaded", (e) => {
+      });
+      await on<TablesReloaded>("tables-reloaded", (e) => {
         for (const item of e.payload.tables) {
           replaceReloadedTable(item.index, item.table);
         }
@@ -882,16 +907,16 @@ export const useMergeStore = defineStore("merge", () => {
           ElMessage.warning(`${failures.length} 个数据表刷新失败，其余已应用：${failures[0]}`);
         }
         void refreshPlan();
-      }),
-      await listen<{ index: number; message: string }>("table-reload-failed", (e) => {
+      });
+      await on<{ index: number; message: string }>("table-reload-failed", (e) => {
         phase.value = "ready";
         ElMessage.error(`重新读取表头失败：${e.payload.message}`);
-      }),
-      await listen<MergeProgress>("merge-progress", (e) => {
+      });
+      await on<MergeProgress>("merge-progress", (e) => {
         progress.value = e.payload.total === 0 ? 0 : e.payload.current / e.payload.total;
         progressLabel.value = `${e.payload.label}  ·  ${e.payload.current.toLocaleString()} / ${e.payload.total.toLocaleString()} 行`;
-      }),
-      await listen<MergeFinished>("merge-finished", (e) => {
+      });
+      await on<MergeFinished>("merge-finished", (e) => {
         phase.value = "ready";
         progress.value = 1;
         progressLabel.value = "合并完成";
@@ -902,8 +927,8 @@ export const useMergeStore = defineStore("merge", () => {
           );
         }
         void revealOutput(e.payload.output);
-      }),
-      await listen<DatabaseImportFinished>("database-import-finished", (e) => {
+      });
+      await on<DatabaseImportFinished>("database-import-finished", (e) => {
         databaseLastResult.value = e.payload;
         phase.value = "ready";
         progress.value = 1;
@@ -911,17 +936,17 @@ export const useMergeStore = defineStore("merge", () => {
         ElMessage.success(
           `已导入 ${formatNumber(e.payload.rows)} 行到 ${e.payload.target}`
         );
-      }),
-      await listen("merge-cancelled", () => {
+      });
+      await on("merge-cancelled", () => {
         phase.value = "ready";
         progressLabel.value = "已取消";
-      }),
-      await listen<{ message: string }>("merge-failed", (e) => {
+      });
+      await on<{ message: string }>("merge-failed", (e) => {
         phase.value = "ready";
         progressLabel.value = "";
         ElMessage.error(`合并失败：${e.payload.message}`);
-      }),
-      await listen<PreflightDone>("preflight-done", async (e) => {
+      });
+      await on<PreflightDone>("preflight-done", async (e) => {
         checkIssues.value = e.payload.issues;
         checkRan.value = true;
         const errors = e.payload.issues.filter((i) => i.level === "Error");
@@ -954,8 +979,8 @@ export const useMergeStore = defineStore("merge", () => {
           const warnCount = e.payload.issues.filter((i) => i.level === "Warning").length;
           progressLabel.value = `检查完成：${errors.length} 个错误，${warnCount} 个提醒`;
         }
-      }),
-      await listen<UpdateResult>("update-result", (e) => {
+      });
+      await on<UpdateResult>("update-result", (e) => {
         updateChecking.value = false;
         if (e.payload.newer) {
           updateText.value = `发现 v${e.payload.version}`;
@@ -966,18 +991,18 @@ export const useMergeStore = defineStore("merge", () => {
           if (!silentUpdateCheck) ElMessage.success("已是最新版本");
         }
         silentUpdateCheck = false;
-      }),
-      await listen<UpdateDownloadProgress>("update-download-progress", (e) => {
+      });
+      await on<UpdateDownloadProgress>("update-download-progress", (e) => {
         updateStatus.value = "正在下载…";
         updateProgress.value = e.payload.total > 0
           ? Math.min(100, Math.round((e.payload.downloaded / e.payload.total) * 100))
           : 0;
-      }),
-      await listen("update-installing", () => {
+      });
+      await on("update-installing", () => {
         updateProgress.value = 100;
         updateStatus.value = "正在重启…";
-      }),
-      await listen<{ message: string }>("update-failed", (e) => {
+      });
+      await on<{ message: string }>("update-failed", (e) => {
         const wasDownloading = updateDownloading.value;
         updateChecking.value = false;
         updateDownloading.value = false;
@@ -990,8 +1015,8 @@ export const useMergeStore = defineStore("merge", () => {
           ElMessage.error(`${wasDownloading ? "更新" : "检查更新"}失败：${e.payload.message}`);
         }
         silentUpdateCheck = false;
-      })
-    );
+      });
+    });
   }
 
   async function revealOutput(output?: string) {
@@ -1035,7 +1060,7 @@ export const useMergeStore = defineStore("merge", () => {
     showSourcePreview, closeSourcePreview, showMergedPreview, runPreflight, startMerge, cancelMerge,
     loadDatabaseProfiles, saveDatabaseProfile, deleteDatabaseProfile, testDatabaseConnection,
     newDatabaseProfile, openDatabaseTarget, openDatabaseConnections,
-    saveScheme, openScheme, openSchemeByPath, checkUpdate, installUpdate, loadState, initEvents, revealOutput, openLog, refreshPlan,
+    saveScheme, openScheme, openSchemeByPath, checkUpdate, installUpdate, loadState, initEvents, disposeEvents, revealOutput, openLog, refreshPlan,
     displayName, MODE_LABELS,
   };
 });

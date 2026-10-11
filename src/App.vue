@@ -90,6 +90,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  store.disposeEvents();
   window.removeEventListener("keydown", onKeyDown);
   window.removeEventListener("contextmenu", onContextMenu);
   unlistenDrop?.();
