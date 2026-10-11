@@ -56,7 +56,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 1. 选择一个文件夹或多个表格文件。选择文件夹时会递归扫描全部子目录。
 2. 在数据表列表中取消不需要的 Sheet；若表头不在第一行，调整“开始行”；只有跨多行的复合表头才需要调整“占用行数”。
 3. 在“合并规则”选择修正表头或列名交集，并按需要设置筛选、去重、清洗和输出顺序。
-4. 在数据源列表或字段映射中随时预览源表；在“输出预览”查看结果前 30 行和检查报告。
+4. 在数据源列表或字段映射中随时预览源表；在“输出预览”按来源表查看前 5 行样本和检查报告。
 5. 在底部选择输出到“Excel 文件”或“PostgreSQL”。数据库模式先配置连接、schema、目标表和表存在策略；点击开始后软件会再次执行阻断性检查，对清空/重建表再次确认。
 
 ## 合并规则细节
@@ -73,16 +73,23 @@ Set-ExecutionPolicy -Scope Process Bypass
 src/
   views/              数据源、合并规则、预览与检查
   components/         底部目标切换、数据库设置、标题栏等组件
-  stores/merge.ts     前端任务状态、Tauri 命令与事件桥
+  native.ts          类型化 Tauri 命令与事件契约
+  stores/merge.ts     保持页面接口的 Pinia 组装入口
+  stores/merge/       更新、数据库、数据源、映射、预览、方案、任务协调
 src-tauri/src/
-  scan.rs             文件发现、表头识别、CSV 编码与分隔符处理
+  scan.rs / scan/     兼容入口；发现、格式、CSV、工作簿、标记表格、表头、后台任务
   model.rs            合并、清洗和字段映射模型
   inspect.rs          源数据/结果预览和检查报告
-  merge.rs            统一行处理管线与恒定内存 XLSX 写出
-  database.rs         SheetForge 行流与 PostgreSQL 导入的适配层
+  merge.rs / merge/   统一行流；行映射与清洗、XLSX 适配器、后台事件
+  database.rs         配置、凭据和事件的应用边界
+  database/engine.rs  独立 PostgreSQL 导入核心，接收连接、取消标志和进度回调
   pg_import/          已融合的连接/凭据/目标表/字段映射/COPY 核心
   commands.rs         Tauri 命令入口与后台任务状态
 ```
+
+## 开发与测试
+
+使用 Node.js 22 和稳定版 Rust。运行 `npm ci`、`npm test`、`npm run build`；Rust 检查、真实 PostgreSQL 17 测试和性能复测方法见 [测试说明](tests/README.md)。Windows 发布依赖 Linux 数据库集成作业通过，PR 也执行前端、Rust 和原生更新测试。
 
 ## 隐私与兼容性
 

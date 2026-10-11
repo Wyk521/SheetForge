@@ -13,7 +13,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  postgres-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: sheetforge-ci-only
+          POSTGRES_DB: sheetforge_dt
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SHEETFORGE_TEST_POSTGRES_PORT: 5432
+      SHEETFORGE_TEST_POSTGRES_DATABASE: sheetforge_dt
+      SHEETFORGE_TEST_POSTGRES_USER: postgres
+      SHEETFORGE_TEST_POSTGRES_PASSWORD: sheetforge-ci-only
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libdbus-1-dev patchelf
+
+      - name: Use stable Rust
+        run: rustup default stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Test real PostgreSQL import and rollback
+        working-directory: src-tauri
+        run: cargo test --locked postgres_integration -- --ignored
+
   build:
+    needs: postgres-integration
     runs-on: windows-latest
     permissions:
       contents: write
@@ -100,6 +146,7 @@ jobs:
           }
 
       - name: Attest portable executable
+        if: github.event_name == 'push'
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: dist/SheetForge.exe

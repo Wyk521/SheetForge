@@ -1,5 +1,7 @@
 //! Application boundary: saved configuration, system credentials and native events.
 mod engine;
+#[cfg(test)]
+mod integration_tests;
 mod types;
 use crate::merge::{is_cancelled, MergeFailedDto, MergeProgressDto};
 use crate::model::{MergeOptions, SourceTable};

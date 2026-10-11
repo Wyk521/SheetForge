@@ -772,3 +772,78 @@ fn cancelled_row_stream_is_recognised_as_cancellation() {
     .unwrap_err();
     assert!(crate::merge::is_cancelled(&error), "{error:#}");
 }
+
+#[test]
+fn native_xls_and_xlsb_date_files_merge_without_type_loss() {
+    for (extension, fixture) in [
+        (
+            "xls",
+            include_str!("../../tests/fixtures/calamine/date.xls.hex"),
+        ),
+        (
+            "xlsb",
+            include_str!("../../tests/fixtures/calamine/date.xlsb.hex"),
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("date.{extension}"));
+        std::fs::write(&path, hex::decode(fixture.trim()).unwrap()).unwrap();
+        let mut table = scan_file(&path).unwrap().0.remove(0);
+        // Treat the first fixture row as a header; verify the remaining original cells.
+        table.header_row = 1;
+        table.header_rows = 1;
+        table.headers = vec!["日期".into(), "数值".into()];
+        table.mappings = crate::model::make_default_mappings(&table.headers);
+        let rows = merge_and_read_cells(vec![table], MergeOptions::default());
+        assert_eq!(rows.len(), 3, "{extension}");
+        assert_eq!(
+            rows[0],
+            [Data::String("日期".into()), Data::String("数值".into())]
+        );
+        match rows[1][0] {
+            Data::DateTime(value) => assert_eq!(value.as_f64(), 44198.0),
+            ref other => panic!("{extension}: date became {other:?}"),
+        }
+        assert_eq!(rows[1][1], Data::Float(16.0));
+        assert_eq!(rows[2][1], Data::Float(17.0));
+    }
+}
+
+#[test]
+fn native_ods_file_preserves_iso_dates_and_durations() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("date.ods");
+    std::fs::write(
+        &path,
+        hex::decode(include_str!("../../tests/fixtures/calamine/date.ods.hex").trim()).unwrap(),
+    )
+    .unwrap();
+    let mut table = scan_file(&path).unwrap().0.remove(0);
+    table.header_row = 1;
+    table.header_rows = 1;
+    table.headers = vec!["日期".into()];
+    table.mappings = crate::model::make_default_mappings(&table.headers);
+    let rows = merge_and_read(vec![table], MergeOptions::default());
+    assert_eq!(
+        rows,
+        vec![
+            vec!["日期"],
+            vec!["2021-01-01T10:10:10"],
+            vec!["PT10H10M10S"],
+            vec!["PT10H10M10.123456S"]
+        ]
+    );
+}
+
+#[test]
+fn tsv_and_xlsm_inputs_use_the_same_output_pipeline() {
+    let dir = tempfile::tempdir().unwrap();
+    let tsv = scan_csv(&dir, "input.tsv", "id\tname\n001\t甲\n");
+    let path = make_workbook(&dir, "input.xlsm", &[&["id", "name"], &["002", "乙"]]);
+    let mut tables = vec![tsv];
+    tables.extend(scan_file(&path).unwrap().0);
+    assert_eq!(
+        merge_and_read(tables, MergeOptions::default()),
+        vec![vec!["id", "name"], vec!["001", "甲"], vec!["002", "乙"]]
+    );
+}
