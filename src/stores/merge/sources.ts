@@ -99,6 +99,7 @@ export function createSourcesActions(context: Pick<MergeContext, "databaseImport
         }
     }
     async function scanFiles(paths: string[]) {
+        if (busy.value) return;
         scanAppend.value = sources.value.length > 0;
         if (!outputPath.value.trim() && paths.length > 0) {
             const folder = paths[0].replace(/[\\/][^\\/]*$/, "");

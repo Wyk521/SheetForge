@@ -156,6 +156,42 @@ describe("预览请求", () => {
 });
 
 describe("处理任务", () => {
+  it("后台完成先于命令确认返回时仍保持完成状态", async () => {
+    const store = useMergeStore();
+    await store.initEvents();
+    store.outputPath = "结果.xlsx";
+    native.invoke.mockImplementation(async (command) => {
+      if (command === "path_exists") return false;
+      if (command === "start_merge") await emit("merge-finished", { output: "结果.xlsx", rows: 0, sheets: 1, truncated_cells: 0 });
+    });
+    await emit("preflight-done", { issues: [], continues_merge: true });
+    expect(store.phase).toBe("ready");
+    expect(store.progressLabel).toBe("合并完成");
+  });
+  it("启动失败可重新检查并重试，取消请求失败保留运行状态", async () => {
+    const store = useMergeStore();
+    await store.initEvents();
+    store.outputDestination = "postgres";
+    native.invoke.mockRejectedValueOnce(new Error("启动失败"));
+    await emit("preflight-done", { issues: [], continues_merge: true });
+    expect(store.phase).toBe("ready");
+    expect(store.progressLabel).toBe("");
+    await store.runPreflight();
+    expect(store.phase).toBe("checking");
+    store.phase = "merging";
+    store.progressLabel = "正在导入";
+    native.invoke.mockRejectedValueOnce(new Error("无法取消"));
+    await expect(store.cancelMerge()).resolves.toBeUndefined();
+    expect(store.phase).toBe("merging");
+    expect(store.progressLabel).toBe("正在导入");
+  });
+  it("处理期间拖入文件不启动第二个扫描任务", async () => {
+    const store = useMergeStore();
+    store.phase = "merging";
+    await store.scanFiles(["二.xlsx"]);
+    expect(called("scan_files")).toHaveLength(0);
+    expect(store.phase).toBe("merging");
+  });
   it("预检调用被拒绝后恢复状态并显示错误", async () => {
     const store = useMergeStore();
     native.invoke.mockRejectedValueOnce(new Error("无法检查"));
@@ -223,6 +259,30 @@ describe("处理任务", () => {
 });
 
 describe("异步状态和事件生命周期", () => {
+  it("部分监听注册失败会释放已注册项并允许重试", async () => {
+    const store = useMergeStore();
+    const original = native.listen.getMockImplementation()!;
+    native.listen.mockImplementationOnce(original).mockRejectedValueOnce(new Error("监听失败"));
+    await expect(store.initEvents()).rejects.toThrow("监听失败");
+    expect([...native.handlers.values()].every((handlers) => handlers.size === 0)).toBe(true);
+    await store.initEvents();
+    expect(native.handlers.get("merge-finished")?.size).toBe(1);
+    store.disposeEvents();
+    await store.initEvents();
+    expect(native.handlers.get("merge-finished")?.size).toBe(1);
+  });
+  it("销毁后才完成的监听注册也会被释放", async () => {
+    const store = useMergeStore();
+    const late = deferred<() => void>();
+    const release = vi.fn();
+    native.listen.mockImplementationOnce(() => late.promise);
+    const pending = store.initEvents();
+    store.$dispose();
+    late.resolve(release);
+    await pending;
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(native.listen).toHaveBeenCalledTimes(1);
+  });
   it("输出计划不会被较早返回的响应覆盖", async () => {
     const store = useMergeStore();
     const old = deferred<{ headers: string[] }>();

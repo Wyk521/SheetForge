@@ -11,6 +11,7 @@ type Rules = {
 };
 /** The wire contract is kept here; pages and domains do not choose response types. */
 export interface NativeCommands {
+    save_text_file: Request<{ path: string; content: string }>;
     get_state: Request<undefined, {
         settings: T.AppSettings;
     }>;

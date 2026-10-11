@@ -44,6 +44,10 @@ export function createTaskActions(context: Pick<MergeContext, "databaseImport" |
         }
     }
     async function confirmMerge() {
+        phase.value = "merging";
+        progress.value = 0;
+        progressLabel.value =
+            outputDestination.value === "xlsx" ? "正在准备输出工作簿…" : "正在连接 PostgreSQL…";
         try {
             if (outputDestination.value === "xlsx") {
                 await invoke("start_merge", {
@@ -59,13 +63,10 @@ export function createTaskActions(context: Pick<MergeContext, "databaseImport" |
                     request: databaseImport.value,
                 });
             }
-            phase.value = "merging";
-            progress.value = 0;
-            progressLabel.value =
-                outputDestination.value === "xlsx" ? "正在准备输出工作簿…" : "正在连接 PostgreSQL…";
         }
         catch (error) {
             phase.value = "ready";
+            progressLabel.value = "";
             ElMessage.error(String(error));
         }
     }
@@ -92,8 +93,16 @@ export function createTaskActions(context: Pick<MergeContext, "databaseImport" |
         catch {
             return;
         }
+        // A native completion event can arrive while the confirmation dialog is open.
+        if (phase.value !== "merging") return;
+        const previousLabel = progressLabel.value;
         progressLabel.value = "正在取消…";
-        await invoke("cancel_merge");
+        try {
+            await invoke("cancel_merge");
+        } catch (error) {
+            if (phase.value === "merging") progressLabel.value = previousLabel;
+            ElMessage.error(String(error));
+        }
     }
     async function revealOutput(output?: string) {
         try {
