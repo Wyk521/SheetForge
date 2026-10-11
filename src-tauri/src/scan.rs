@@ -20,8 +20,17 @@ pub(crate) use format::{is_markup_workbook, is_xlsx_path};
 #[allow(unused_imports)]
 pub use header::recommend_header;
 pub(crate) use markup::read_markup_workbook;
+#[allow(unused_imports)]
+pub(crate) use markup::MarkupSheet;
 use std::{collections::HashSet, path::Path};
 pub use tasks::{spawn_group_reload, spawn_scan, spawn_table_reload};
+#[allow(unused_imports)]
+pub use tasks::{
+    ScanFailedDto, ScanFinishedDto, ScanProgressDto, TableReloadFailedDto, TableReloadedDto,
+    TablesReloadedDto,
+};
+#[allow(unused_imports)]
+pub(crate) use workbook::XlsxStreamBounds;
 pub(crate) use workbook::{for_each_xlsx_row, open_detected_workbook, open_xlsx_workbook};
 use workbook::{scan_workbook_auto_headers, scan_workbook_sheet, scan_xlsx_auto_headers};
 
