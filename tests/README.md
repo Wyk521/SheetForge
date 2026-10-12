@@ -44,7 +44,8 @@ git worktree add --detach /tmp/sheetforge-baseline fb1a2d6eea403e82990a8a1c9aeaa
 export CARGO_TARGET_DIR="$PWD/src-tauri/target"
 python3 scripts/benchmark.py /tmp/sheetforge-bench baseline --repo /tmp/sheetforge-baseline --generate
 python3 scripts/benchmark.py /tmp/sheetforge-bench final --repo "$PWD" --compare baseline
-git worktree remove /tmp/sheetforge-baseline
+# 仅清理上面新建的临时检出；允许删除测试自动生成的 schema。
+git worktree remove --force /tmp/sheetforge-baseline
 ```
 
 脚本在 JSON 中记录源码提交、是否有未提交改动、Rust/Cargo 版本、系统、构建模式及输入文件 SHA-256；新报告之间比较时要求工具链、系统、构建模式和样本一致。脚本按进程测量完整扫描和合并，分别报告中位耗时与最大驻留内存中位数，并比较输出工作表、共享字符串和样式 XML。任一指标增加超过 10% 或输出内容变化都会失败。生成文件和日志留在指定临时目录，不提交到仓库。
