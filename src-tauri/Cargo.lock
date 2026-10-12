@@ -3975,7 +3975,7 @@ dependencies = [
 
 [[package]]
 name = "sheetforge"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "anyhow",
  "bytes",

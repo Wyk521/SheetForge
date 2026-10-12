@@ -28,7 +28,7 @@ export SHEETFORGE_TEST_POSTGRES_PASSWORD='专用测试实例密码'
 cargo test --manifest-path src-tauri/Cargo.toml --locked postgres_integration -- --ignored
 ```
 
-用例要求 PostgreSQL 17，环境缺失、连接失败或版本不符均失败。每个用例创建独立的 `sheetforge_dt_<进程>_<序号>` schema，成功后删除；应使用可销毁的专用数据库。用例涵盖二进制/文本 COPY、NULL 与转义、清洗/筛选/去重/列顺序/来源列、XLSX 逐格对照、追加校验、失败和取消后的事务回滚、取消后重试。
+用例要求 PostgreSQL 17，环境缺失、连接失败或版本不符均失败。每个用例创建独立的 `sheetforge_dt_<进程>_<序号>` schema，成功后删除；应使用可销毁的专用数据库。用例涵盖二进制/文本 COPY、缺失值与空文本的 NULL 区别、转义、真实 XLSX 数字/日期/时间/布尔值与两种合并模式的输出一致性、清洗/筛选/去重/列顺序/来源列、XLSX 逐格对照、追加校验、失败和取消后的事务回滚、取消后重试。
 
 普通 `cargo test` 将数据库和大文件性能用例列为 ignored；Linux CI 的独立作业显式执行数据库用例，不以环境缺失跳过。Windows CI 执行普通 Rust 测试，其中原生更新测试复制测试程序到临时 Unicode 路径，实际替换和启动，再验证无效 EXE/启动后退出时的恢复。
 
@@ -37,22 +37,26 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked postgres_integration --
 macOS/Linux 的 Python 3 和 `/usr/bin/time`；同一机器、同一 Rust 工具链和构建模式，基线与重构后各运行三次，期间避免运行其他重负载任务：
 
 ```sh
-# 在基线版本生成固定样本：100 万行、8 列 CSV；10 Sheet、每 Sheet 1 万行的 XLSX。
-python3 scripts/benchmark.py /tmp/sheetforge-bench baseline --generate
-# 切换到待验收版本后，复用同一份样本。
-python3 scripts/benchmark.py /tmp/sheetforge-bench final --compare baseline
+# 使用当前脚本构建旧检出，避免旧基线没有 benchmark.py 的问题。
+# fb1a2d6 包含性能测试入口，生产引擎尚未拆分。
+git worktree add --detach /tmp/sheetforge-baseline fb1a2d6eea403e82990a8a1c9aeaa77e77c08d60
+# 共用构建缓存；脚本仍按每个检出的锁文件重建测试程序。
+export CARGO_TARGET_DIR="$PWD/src-tauri/target"
+python3 scripts/benchmark.py /tmp/sheetforge-bench baseline --repo /tmp/sheetforge-baseline --generate
+python3 scripts/benchmark.py /tmp/sheetforge-bench final --repo "$PWD" --compare baseline
+git worktree remove /tmp/sheetforge-baseline
 ```
 
-脚本按进程测量完整扫描和合并，分别报告中位耗时与最大驻留内存中位数，并比较输出工作表、共享字符串和样式 XML。任一指标增加超过 10% 或输出内容变化都会失败。生成文件和日志留在指定临时目录，不提交到仓库。
+脚本在 JSON 中记录源码提交、是否有未提交改动、Rust/Cargo 版本、系统、构建模式及输入文件 SHA-256；新报告之间比较时要求工具链、系统、构建模式和样本一致。脚本按进程测量完整扫描和合并，分别报告中位耗时与最大驻留内存中位数，并比较输出工作表、共享字符串和样式 XML。任一指标增加超过 10% 或输出内容变化都会失败。生成文件和日志留在指定临时目录，不提交到仓库。
 
-本轮同机 debug 模式验收（基线为首个测试保护提交，生产引擎尚未拆分）：
+v0.7.10 同机 debug 模式验收（基线为首个测试保护提交，生产引擎尚未拆分）：
 
 | 样本 | 基线耗时 | 重构后耗时 | 基线 RSS | 重构后 RSS | 增幅（耗时 / RSS） |
 |---|---:|---:|---:|---:|---:|
 | 百万行 CSV | 57.58 s | 57.81 s | 14,696,448 B | 15,417,344 B | +0.4% / +4.9% |
 | 多 Sheet XLSX | 12.91 s | 12.96 s | 15,499,264 B | 16,400,384 B | +0.4% / +5.8% |
 
-两种输出的内容校验一致。以上是引擎进程数据，不代表完整桌面窗口的内存占用。真实 PostgreSQL 17 的五组用例已在本地临时容器通过；Windows 结果以 PR 和发布 Actions 的实际结论为准。桌面交互验收与自动化结果分开记录，不能用 macOS 或编译通过代替 Windows 原生测试。
+两种输出的内容校验一致。以上是引擎进程数据，不代表完整桌面窗口的内存占用。真实 PostgreSQL 17 的六组用例（新增工作簿与两种模式对照）已在本地临时容器通过；Windows 结果以 PR 和发布 Actions 的实际结论为准。桌面交互验收与自动化结果分开记录：macOS 已执行文件选择、来源预览、字段重命名、结果预览和真实 XLSX 写出；Windows 原生自动化已覆盖替换、特殊字符路径与失败恢复。完整 Windows 桌面交互和已安装旧版通过真实更新服务升级到新版尚未验收，不计为通过；当前开发机为 macOS，Windows CI 的原生更新用例使用测试程序及新程序桩，不能替代这两项证据。
 
 ## 固定格式样本
 

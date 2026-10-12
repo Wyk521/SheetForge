@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -39,21 +40,41 @@ def cells(path):
     return result
 
 
+def file_hash(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("label")
     parser.add_argument("--compare")
     parser.add_argument("--generate", action="store_true")
+    parser.add_argument("--repo", type=Path, default=Path.cwd(),
+                        help="checkout to build; lets this script benchmark revisions that predate it")
     args = parser.parse_args()
     args.directory = args.directory.resolve()
     args.directory.mkdir(parents=True, exist_ok=True)
-    build = subprocess.check_output(["cargo", "test", "--manifest-path", "src-tauri/Cargo.toml", "--locked", "--no-run", "--message-format=json"], text=True)
+    args.repo = args.repo.resolve()
+    build = subprocess.check_output(["cargo", "test", "--manifest-path", "src-tauri/Cargo.toml", "--locked", "--no-run", "--message-format=json"], cwd=args.repo, text=True)
     binary = next(item["executable"] for line in build.splitlines() if (item := json.loads(line)).get("executable"))
     env = dict(os.environ, SHEETFORGE_BENCH_DIR=str(args.directory))
     if args.generate:
         subprocess.run([binary, "--exact", "performance_tests::generate_fixtures", "--ignored"], env=env, check=True)
-    report = {}
+    command = lambda *parts: subprocess.check_output(parts, cwd=args.repo, text=True).strip()
+    report = {"metadata": {
+        "source_commit": command("git", "rev-parse", "HEAD"),
+        "source_dirty": bool(command("git", "status", "--porcelain", "--untracked-files=no")),
+        "rustc": command("rustc", "--version"),
+        "cargo": command("cargo", "--version"),
+        "platform": platform.platform(),
+        "build_profile": "test-debug",
+        "fixtures": {name: file_hash(args.directory / name) for name in ("million.csv", "multi.xlsx")},
+    }}
     for kind in ("csv", "xlsx"):
         runs = []
         for index in range(3):
@@ -69,7 +90,11 @@ def main():
     (args.directory / f"{args.label}.json").write_text(json.dumps(report, indent=2))
     if args.compare:
         previous = json.loads((args.directory / f"{args.compare}.json").read_text())
-        for kind, current in report.items():
+        if "metadata" in previous:
+            for key in ("rustc", "cargo", "platform", "build_profile", "fixtures"):
+                assert report["metadata"][key] == previous["metadata"][key], f"benchmark conditions changed: {key}"
+        for kind in ("csv", "xlsx"):
+            current = report[kind]
             assert current["cells"] == previous[kind]["cells"], f"{kind}: output cells changed"
             for metric in ("median_seconds", "median_rss_bytes"):
                 ratio = current[metric] / previous[kind][metric]

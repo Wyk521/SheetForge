@@ -1,12 +1,13 @@
 //! Explicit PostgreSQL 17 tests. Missing configuration is a failure, never a skip.
 use super::{engine::import_database, DatabaseImportRequest};
 use crate::{
-    merge::merge_tables,
-    model::{MergeOptions, SourceTable, TransformOp},
+    merge::{merge_tables, CellValue},
+    model::{MergeMode, MergeOptions, SourceTable, TransformOp},
     pg_import::{config::ConnectionProfile, postgres::connection},
     scan::scan_file,
 };
 use calamine::{open_workbook_auto, Data, Reader};
+use rust_xlsxwriter::{ExcelDateTime, Format, Workbook};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
@@ -127,11 +128,18 @@ fn postgres_integration_copy_formats_preserve_null_empty_and_escaping() {
     run(async {
         let db = Database::new().await;
         let dir = tempfile::tempdir().unwrap();
-        let table = source(
+        let mut table = source(
             &dir,
             "input.csv",
             "id,note,missing\n001,\"中文\t反斜杠\\N\n第二行\",\n002,,\n",
         );
+        // A CSV source can have an empty sheet label. It becomes an explicit Text("")
+        // provenance cell; blank input cells remain Empty in the shared row mapper.
+        table.sheet_name.clear();
+        let options = MergeOptions {
+            include_source_sheet: true,
+            ..Default::default()
+        };
         for format in ["binary", "text"] {
             for nulls in [true, false] {
                 let name = format!("copy_{format}_{nulls}");
@@ -140,7 +148,7 @@ fn postgres_integration_copy_formats_preserve_null_empty_and_escaping() {
                 request.table_persistence = "unlogged".into();
                 request.fast_mode = true;
                 let summary = db
-                    .import(vec![table.clone()], MergeOptions::default(), request)
+                    .import(vec![table.clone()], options.clone(), request)
                     .await
                     .unwrap()
                     .unwrap();
@@ -151,7 +159,7 @@ fn postgres_integration_copy_formats_preserve_null_empty_and_escaping() {
                     .client
                     .query(
                         &format!(
-                            "SELECT id, note, missing FROM {}.{name} ORDER BY id",
+                            "SELECT id, note, missing, \"来源工作表\" FROM {}.{name} ORDER BY id",
                             db.schema
                         ),
                         &[],
@@ -164,6 +172,168 @@ fn postgres_integration_copy_formats_preserve_null_empty_and_escaping() {
                 let empty: Option<String> = None;
                 assert_eq!(rows[0].get::<_, Option<String>>(2), empty);
                 assert_eq!(rows[1].get::<_, Option<String>>(1), empty);
+                for row in &rows {
+                    assert_eq!(
+                        row.get::<_, Option<String>>(3),
+                        if nulls { None } else { Some(String::new()) },
+                        "empty text obeys empty_as_null; missing input cells are always NULL"
+                    );
+                }
+            }
+        }
+        db.cleanup().await;
+    });
+}
+
+#[test]
+#[ignore = "requires an isolated PostgreSQL 17 service"]
+fn postgres_integration_typed_workbooks_match_xlsx_in_both_modes() {
+    run(async {
+        let db = Database::new().await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut tables = Vec::new();
+        for (name, id) in [("a", "001"), ("b", "002")] {
+            let path = dir.path().join(format!("{name}.xlsx"));
+            let mut workbook = Workbook::new();
+            let sheet = workbook.add_worksheet();
+            sheet.set_name("数据").unwrap();
+            for (column, header) in [
+                "id", "name", "amount", "date", "time", "flag", "missing", "long_id", name,
+            ]
+            .iter()
+            .enumerate()
+            {
+                sheet.write_string(0, column as u16, *header).unwrap();
+            }
+            sheet.write_string(1, 0, id).unwrap();
+            sheet.write_string(1, 1, " Alice ").unwrap();
+            sheet.write_number(1, 2, 12.5).unwrap();
+            sheet
+                .write_datetime_with_format(
+                    1,
+                    3,
+                    ExcelDateTime::from_ymd(2024, 1, 15).unwrap(),
+                    &Format::new().set_num_format("yyyy-mm-dd"),
+                )
+                .unwrap();
+            sheet
+                .write_datetime_with_format(
+                    1,
+                    4,
+                    ExcelDateTime::from_hms(8, 30, 15.0).unwrap(),
+                    &Format::new().set_num_format("hh:mm:ss"),
+                )
+                .unwrap();
+            sheet.write_boolean(1, 5, true).unwrap();
+            sheet.write_string(1, 7, "9007199254740993").unwrap();
+            sheet.write_string(1, 8, name).unwrap();
+            workbook.save(&path).unwrap();
+            let mut table = scan_file(&path).unwrap().0.remove(0);
+            // These manual rules must be ignored by Intersection.
+            table.mappings[1].transform = TransformOp::Uppercase;
+            table.mappings[8].enabled = false;
+            tables.push(table);
+        }
+        for (mode, label) in [
+            (MergeMode::Manual, "manual"),
+            (MergeMode::Intersection, "intersection"),
+        ] {
+            let options = MergeOptions {
+                mode,
+                include_source_file: true,
+                include_source_sheet: true,
+                output_order: [
+                    "name",
+                    "id",
+                    "amount",
+                    "date",
+                    "time",
+                    "flag",
+                    "missing",
+                    "long_id",
+                    "来源文件",
+                    "来源工作表",
+                ]
+                .map(String::from)
+                .to_vec(),
+                ..Default::default()
+            };
+            let path = dir.path().join(format!("out_{label}.xlsx"));
+            merge_tables(
+                &tables,
+                &options,
+                &path,
+                &|_, _, _| {},
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+            .unwrap();
+            let range = open_workbook_auto(&path)
+                .unwrap()
+                .worksheet_range("合并结果_001")
+                .unwrap();
+            let expected_name = if mode == MergeMode::Manual {
+                "ALICE"
+            } else {
+                " Alice "
+            };
+            for (index, row) in range.rows().skip(1).enumerate() {
+                assert_eq!(row[0], Data::String(expected_name.into()));
+                assert_eq!(row[1], Data::String(format!("{:03}", index + 1)));
+                assert!(matches!(row[2], Data::Float(v) if v == 12.5));
+                assert!(matches!(row[3], Data::DateTime(_)));
+                assert!(matches!(row[4], Data::DateTime(_)));
+                assert_eq!(row[5], Data::Bool(true));
+                assert_eq!(row[6], Data::Empty);
+                assert_eq!(row[7], Data::String("9007199254740993".into()));
+            }
+            let expected = range
+                .rows()
+                .skip(1)
+                .map(|row| {
+                    row.iter()
+                        .map(|value| {
+                            CellValue::from_calamine(value)
+                                .copy_text(false)
+                                .map(|v| v.into_owned())
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(expected[0][3].as_deref(), Some("2024-01-15"));
+            assert_eq!(expected[0][4].as_deref(), Some("08:30:15"));
+            for format in ["binary", "text"] {
+                let name = format!("{label}_{format}");
+                let summary = db
+                    .import(
+                        tables.clone(),
+                        options.clone(),
+                        db.request(&name, format, "abort"),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(summary.rows, 2);
+                let rows = db
+                    .client
+                    .query(
+                        &format!("SELECT * FROM {}.{name} ORDER BY id", db.schema),
+                        &[],
+                    )
+                    .await
+                    .unwrap();
+                let actual = rows
+                    .iter()
+                    .map(|row| {
+                        (0..row.len())
+                            .map(|column| row.get::<_, Option<String>>(column))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    actual, expected,
+                    "{label} {format}: typed file semantics must match XLSX"
+                );
             }
         }
         db.cleanup().await;
