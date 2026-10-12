@@ -9,9 +9,7 @@ import {
   type DatabaseImportFinished,
   type DatabaseImportOptions,
 } from "../../types";
-import { formatNumber } from "./utils";
 import type { MergeContext } from "./context";
-import type { NativeOn } from "../../native";
 export function createDatabaseState() {
   const databaseImport = ref<DatabaseImportOptions>(
     defaultDatabaseImportOptions(),
@@ -38,10 +36,6 @@ export function createDatabaseActions(
     | "databaseConfigPath"
     | "showDatabaseDialog"
     | "showDatabaseConnectionsDialog"
-    | "databaseLastResult"
-    | "phase"
-    | "progress"
-    | "progressLabel"
   >,
 ) {
   const {
@@ -50,10 +44,6 @@ export function createDatabaseActions(
     databaseConfigPath,
     showDatabaseDialog,
     showDatabaseConnectionsDialog,
-    databaseLastResult,
-    phase,
-    progress,
-    progressLabel,
   } = context;
   const databaseReady = computed(
     () =>
@@ -128,17 +118,6 @@ export function createDatabaseActions(
   function openDatabaseConnections() {
     showDatabaseConnectionsDialog.value = true;
   }
-  async function registerEvents(on: NativeOn) {
-    await on("database-import-finished", (e) => {
-      databaseLastResult.value = e.payload;
-      phase.value = "ready";
-      progress.value = 1;
-      progressLabel.value = "数据库导入完成";
-      ElMessage.success(
-        `已导入 ${formatNumber(e.payload.rows)} 行到 ${e.payload.target}`,
-      );
-    });
-  }
   return {
     databaseReady,
     loadDatabaseProfiles,
@@ -148,6 +127,5 @@ export function createDatabaseActions(
     newDatabaseProfile,
     openDatabaseTarget,
     openDatabaseConnections,
-    registerEvents,
   };
 }

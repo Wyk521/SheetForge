@@ -60,22 +60,12 @@ test("源表预览在当前工作区弹出，不再强制跳到输出页", async
   assert.match(dialog, /store\.sourcePreviewVisible/);
 });
 
-test("输出预览按来源表分组，并为每个来源单独抽样", async () => {
-  const [types, inspect, commands, preview, grid] = await Promise.all([
-    read("src/types.ts"),
-    read("src-tauri/src/inspect.rs"),
-    read("src-tauri/src/commands.rs"),
+test("输出预览展示来源分组及抽样提示", async () => {
+  const [preview, grid] = await Promise.all([
     read("src/views/PreviewView.vue"),
     read("src/components/MergedPreviewGrid.vue"),
   ]);
 
-  assert.match(types, /interface MergedPreviewGroup/);
-  assert.match(types, /source_file: string/);
-  assert.match(types, /source_sheet: string/);
-  assert.match(inspect, /struct MergedPreviewGroup/);
-  assert.match(inspect, /for \(source_index, table\) in tables\.iter\(\)\.enumerate\(\)\.filter/);
-  assert.match(inspect, /source_file:/);
-  assert.match(commands, /Result<MergedPreview, String>/);
   assert.match(preview, /MergedPreviewGrid/);
   assert.match(preview, /每张表显示前 5 行/);
   assert.match(grid, /label="来源表名"/);

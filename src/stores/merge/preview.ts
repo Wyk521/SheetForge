@@ -31,6 +31,8 @@ export function createPreviewState() {
 export function createPreviewActions(
   context: Pick<
     MergeContext,
+    | "checkIssues"
+    | "checkRan"
     | "sources"
     | "options"
     | "preview"
@@ -42,6 +44,8 @@ export function createPreviewActions(
   >,
 ) {
   const {
+    checkIssues,
+    checkRan,
     sources,
     options,
     preview,
@@ -57,6 +61,11 @@ export function createPreviewActions(
     mergedPreviewRequest += 1;
     preview.value = null;
     previewTitle.value = "";
+  }
+  function invalidateResults() {
+    clearMergedPreview();
+    checkIssues.value = [];
+    checkRan.value = false;
   }
   async function showSourcePreview(index: number) {
     const table = sources.value[index];
@@ -108,6 +117,7 @@ export function createPreviewActions(
   }
   return {
     clearMergedPreview,
+    invalidateResults,
     showSourcePreview,
     closeSourcePreview,
     showMergedPreview,
