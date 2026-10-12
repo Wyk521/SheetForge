@@ -156,6 +156,28 @@ describe("字段规则和来源", () => {
     ]);
     expect(store.visibleEnabledCount).toBe(1);
   });
+  it("字段启用和按索引、名称排序维护真实输出顺序及边界", async () => {
+    const store = useMergeStore();
+    store.sources = [table(), { ...table("停用.xlsx"), enabled: false }];
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === "get_plan")
+        return { headers: args.options.output_order.length
+          ? args.options.output_order : ["姓名", "金额", "来源文件"] };
+    });
+    await store.refreshPlan();
+    store.moveOutputColumn(0, 1);
+    await vi.waitFor(() => expect(store.planHeaders).toEqual(["金额", "姓名", "来源文件"]));
+    store.moveOutputColumnByName(" 姓名\n", 1);
+    await vi.waitFor(() => expect(store.planHeaders).toEqual(["金额", "来源文件", "姓名"]));
+    store.moveOutputColumn(2, 10);
+    store.moveOutputColumnByName("不存在", -1);
+    store.moveOutputColumn(-1, 1);
+    expect(store.options.output_order).toEqual(["金额", "来源文件", "姓名"]);
+    store.setFieldEnabled("姓名", false);
+    expect(store.sources.map((source) => source.mappings[0].enabled)).toEqual([false, true]);
+    store.setFieldEnabled("姓名", true);
+    expect(store.sources[0].mappings[0].enabled).toBe(true);
+  });
   it("追加扫描去重并保留已有映射和顺序", async () => {
     const store = useMergeStore();
     await store.initEvents();
@@ -298,6 +320,27 @@ describe("处理任务", () => {
     expect(store.phase).toBe("ready");
     expect(native.error).toHaveBeenCalled();
   });
+  it("整本工作簿表头重载失败后保留来源和映射并可重试", async () => {
+    const store = useMergeStore();
+    await store.initEvents();
+    store.sources = [table(), table(table().path, "Sheet2")];
+    store.sources[0].header_row = 3;
+    store.sources[0].header_rows = 2;
+    store.sources[0].mappings[0].target_name = "客户";
+    const before = structuredClone(JSON.parse(JSON.stringify(store.sources)));
+    native.invoke.mockRejectedValueOnce(new Error("无法重载整本工作簿"));
+    await store.applyGroupHeader(table().path);
+    expect(store.phase).toBe("ready");
+    expect(store.progressLabel).toBe("");
+    expect(store.sources).toEqual(before);
+    expect(native.error).toHaveBeenCalledWith("Error: 无法重载整本工作簿");
+    await store.applyGroupHeader(table().path);
+    expect(called("reload_group")[1][1]).toMatchObject({headerRow: 3, headerRows: 2});
+    expect(store.phase).toBe("scanning");
+    await emit("tables-reloaded", { tables: before.map((source: SourceTable, index: number) => ({index, table: {...source, header_row: 3, header_rows: 2}})), failures: [] });
+    expect(store.phase).toBe("ready");
+    expect(store.sources.every((source) => source.header_row === 3 && source.header_rows === 2)).toBe(true);
+  });
   it("预检错误阻止实际写出", async () => {
     const store = useMergeStore();
     await store.initEvents();
@@ -418,6 +461,53 @@ describe("异步状态和事件生命周期", () => {
 });
 
 describe("数据库、方案和更新", () => {
+  it("方案保存再打开完整恢复来源、映射和所有规则", async () => {
+    const store = useMergeStore();
+    store.sources = [table(), {...table("停用.csv", "数据"), kind: {Csv: {delimiter: 9}}, enabled: false}];
+    Object.assign(store.sources[0], {header_row: 4, header_rows: 2, estimated_rows: 42});
+    Object.assign(store.sources[0].mappings[0], {target_name: "客户", transform: "Trim"});
+    store.sources[0].mappings[1].enabled = false;
+    store.options = {mode: "Intersection", include_source_file: true, include_source_sheet: true,
+      output_order: ["来源文件", "客户"], deduplicate: true, filter_column: "客户", filter_text: "测试", filter_exclude: true};
+    const expected = JSON.parse(JSON.stringify({tables: store.sources, options: store.options}));
+    let saved: MergeScheme;
+    const original = native.invoke.getMockImplementation()!;
+    native.save.mockResolvedValueOnce("完整方案.json");
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === "save_scheme") {
+        saved = JSON.parse(JSON.stringify({format_version: 1, name: "完整方案", tables: args.tables, options: args.options}));
+        return;
+      }
+      if (command === "open_scheme") return saved;
+      return original(command, args);
+    });
+    await store.saveScheme();
+    expect(called("save_scheme")[0][1]).toEqual({path: "完整方案.json", ...expected});
+    store.sources = [];
+    store.options = defaultOptions();
+    store.preview = {headers: ["旧"], groups: []};
+    store.sourcePreviewVisible = true;
+    store.checkRan = true;
+    await store.openSchemeByPath("完整方案.json");
+    expect(store.sources).toEqual(expected.tables);
+    expect(store.options).toEqual(expected.options);
+    expect(store.preview).toBeNull();
+    expect(store.sourcePreviewVisible).toBe(false);
+    expect(store.checkRan).toBe(false);
+    expect(store.inputLabel).toBe("已打开方案：完整方案.json");
+    expect(store.phase).toBe("ready");
+  });
+  it("方案打开失败保留当前工作区并解除忙碌", async () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    store.options.deduplicate = true;
+    native.invoke.mockRejectedValueOnce(new Error("方案已损坏"));
+    await store.openSchemeByPath("坏方案.json");
+    expect(store.sources).toEqual([table()]);
+    expect(store.options.deduplicate).toBe(true);
+    expect(store.busy).toBe(false);
+    expect(native.error).toHaveBeenCalledWith("打开方案失败：Error: 方案已损坏");
+  });
   it("加载连接为失效选择选择有效替代项，空密码传 null", async () => {
     const store = useMergeStore();
     store.databaseImport.profile_name = "deleted";
