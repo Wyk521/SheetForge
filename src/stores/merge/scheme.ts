@@ -2,100 +2,43 @@ import { ref } from "vue";
 import { invoke } from "../../native";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus";
-import { type AppSettings } from "../../types";
+import type { AppSettings, MergeOptions, SourceTable } from "../../types";
 import type { MergeContext } from "./context";
 export function createSchemeState() {
-  const settings = ref<AppSettings | null>(null);
-  return { settings };
+  return { settings: ref<AppSettings | null>(null) };
 }
-export function createSchemeActions(
-  context: Pick<
-    MergeContext,
-    | "sources"
-    | "inputLabel"
-    | "options"
-    | "checkIssues"
-    | "checkRan"
-    | "settings"
-    | "phase"
-    | "progressLabel"
-    | "busy"
-    | "refreshPlan"
-    | "clearMergedPreview"
-    | "closeSourcePreview"
-    | "loadDatabaseProfiles"
-  >,
-) {
-  const {
-    sources,
-    inputLabel,
-    options,
-    checkIssues,
-    checkRan,
-    settings,
-    phase,
-    progressLabel,
-    busy,
-    refreshPlan,
-    clearMergedPreview,
-    closeSourcePreview,
-    loadDatabaseProfiles,
-  } = context;
-  async function saveScheme() {
+/** Scheme persistence owns settings and file I/O; task coordinates workspace changes. */
+export function createSchemeActions({ settings }: Pick<MergeContext, "settings">) {
+  async function persistScheme(tables: SourceTable[], options: MergeOptions) {
     const path = await save({
       title: "保存合并方案",
       defaultPath: "合并方案.json",
       filters: [{ name: "表格合并方案", extensions: ["json"] }],
     });
-    if (!path) return;
+    if (!path) return null;
     try {
-      await invoke("save_scheme", {
-        path: String(path),
-        tables: sources.value,
-        options: options.value,
-      });
-      progressLabel.value = `方案已保存：${path}`;
+      await invoke("save_scheme", { path: String(path), tables, options });
       ElMessage.success("方案已保存");
-      await loadState();
+      return String(path);
     } catch (error) {
       ElMessage.error(`保存方案失败：${error}`);
+      return null;
     }
   }
-  async function openScheme() {
-    if (busy.value) return;
+  async function chooseScheme() {
     const path = await open({
       title: "打开合并方案",
       multiple: false,
       filters: [{ name: "表格合并方案", extensions: ["json"] }],
     });
-    if (!path) return;
-    await openSchemeByPath(String(path));
+    return path ? String(path) : null;
   }
-  async function openSchemeByPath(path: string) {
-    if (busy.value) return;
-    phase.value = "scanning";
-    progressLabel.value = "正在重新读取方案中的数据源…";
-    try {
-      const scheme = await invoke("open_scheme", { path });
-      sources.value = scheme.tables;
-      options.value = scheme.options;
-      clearMergedPreview();
-      closeSourcePreview();
-      inputLabel.value = `已打开方案：${path}`;
-      checkIssues.value = [];
-      checkRan.value = false;
-      await loadState();
-      await refreshPlan();
-    } catch (error) {
-      ElMessage.error(`打开方案失败：${error}`);
-    } finally {
-      phase.value = "ready";
-    }
+  function readScheme(path: string) {
+    return invoke("open_scheme", { path });
   }
-  async function loadState() {
+  async function loadSettings() {
     const state = await invoke("get_state");
     settings.value = state.settings;
-    await loadDatabaseProfiles();
   }
-  return { saveScheme, openScheme, openSchemeByPath, loadState };
+  return { persistScheme, chooseScheme, readScheme, loadSettings };
 }

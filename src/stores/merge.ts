@@ -73,9 +73,16 @@ export const useMergeStore = defineStore("merge", () => {
     clearMergedPreview: () => previewDomain.clearMergedPreview(),
     closeSourcePreview: () => previewDomain.closeSourcePreview(),
     loadDatabaseProfiles: () => database.loadDatabaseProfiles(),
-    loadState: () => scheme.loadState(),
+    loadSettings: () => scheme.loadSettings(),
+    persistScheme: (tables, options) => scheme.persistScheme(tables, options),
+    chooseScheme: () => scheme.chooseScheme(),
+    readScheme: (path) => scheme.readScheme(path),
+    scanFolder: (path) => task.scanFolder(path),
+    scanFiles: (paths) => task.scanFiles(paths),
+    mergeSources: (existing, incoming) => sourceDomain.mergeSources(existing, incoming),
+    replaceReloadedTable: (index, table) => sourceDomain.replaceReloadedTable(index, table),
+    invalidateResults: () => previewDomain.invalidateResults(),
     openDatabaseTarget: () => database.openDatabaseTarget(),
-    revealOutput: (output) => task.revealOutput(output),
   };
   const context = { ...state, ...callbacks, busy };
   const update = createUpdateActions(context);
@@ -117,19 +124,14 @@ export const useMergeStore = defineStore("merge", () => {
     sheetsMetric,
     chooseFolder,
     chooseFiles,
-    scanFolder,
-    scanFiles,
     toggleSourceEnabled,
     selectAll,
     toggleGroup,
     setGroupEnabled,
     removeGroup,
     removeSource,
-    applyGroupHeader,
-    reloadTable,
   } = sourceDomain;
   const scheme = createSchemeActions(context);
-  const { saveScheme, openScheme, openSchemeByPath, loadState } = scheme;
   const task = createTaskActions({
     ...state,
     ...callbacks,
@@ -138,6 +140,14 @@ export const useMergeStore = defineStore("merge", () => {
   });
   const {
     canStart,
+    scanFolder,
+    scanFiles,
+    applyGroupHeader,
+    reloadTable,
+    saveScheme,
+    openScheme,
+    openSchemeByPath,
+    loadState,
     clearSources,
     runPreflight,
     startMerge,
@@ -151,8 +161,6 @@ export const useMergeStore = defineStore("merge", () => {
   function initEvents() {
     return eventScope.init(async (on) => {
       await update.registerEvents(on);
-      await database.registerEvents(on);
-      await sourceDomain.registerEvents(on);
       await task.registerEvents(on);
     });
   }

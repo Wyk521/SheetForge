@@ -1,4 +1,5 @@
 import type { Ref } from "vue";
+import type { SourceTable, MergeOptions, MergeScheme } from "../../types";
 import type { FieldGroup } from "./utils";
 import type { createUpdateState } from "./update";
 import type { createDatabaseState } from "./database";
@@ -13,9 +14,16 @@ export interface WorkflowCallbacks {
   clearMergedPreview: () => void;
   closeSourcePreview: () => void;
   loadDatabaseProfiles: () => Promise<void>;
-  loadState: () => Promise<void>;
+  loadSettings: () => Promise<void>;
+  persistScheme: (tables: SourceTable[], options: MergeOptions) => Promise<string | null>;
+  chooseScheme: () => Promise<string | null>;
+  readScheme: (path: string) => Promise<MergeScheme>;
+  scanFolder: (path: string) => Promise<void>;
+  scanFiles: (paths: string[]) => Promise<void>;
+  mergeSources: (existing: SourceTable[], incoming: SourceTable[]) => SourceTable[];
+  replaceReloadedTable: (index: number, table: SourceTable) => void;
+  invalidateResults: () => void;
   openDatabaseTarget: () => void;
-  revealOutput: (output?: string) => Promise<void>;
 }
 export type MergeState = ReturnType<typeof createUpdateState> &
   ReturnType<typeof createDatabaseState> &

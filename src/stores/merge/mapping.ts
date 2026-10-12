@@ -26,18 +26,14 @@ export function createMappingActions(
     | "sources"
     | "options"
     | "planHeaders"
-    | "checkIssues"
-    | "checkRan"
-    | "clearMergedPreview"
+    | "invalidateResults"
   >,
 ) {
   const {
     sources,
     options,
     planHeaders,
-    checkIssues,
-    checkRan,
-    clearMergedPreview,
+    invalidateResults,
   } = context;
   let planRequest = 0;
   const fieldGroups = computed<FieldGroup[]>(() => {
@@ -106,9 +102,7 @@ export function createMappingActions(
   });
   async function refreshPlan() {
     const request = ++planRequest;
-    clearMergedPreview();
-    checkIssues.value = [];
-    checkRan.value = false;
+    invalidateResults();
     try {
       const plan = await invoke("get_plan", {
         tables: sources.value,
