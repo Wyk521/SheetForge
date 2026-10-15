@@ -186,7 +186,9 @@ export function createSourcesActions(
       return;
     }
     closeSourcePreview();
-    sources.value.splice(index, 1);
+    sources.value = sources.value.filter(
+      (source) => source.path !== table.path || source.sheet_name !== table.sheet_name,
+    );
     void refreshPlan();
   }
   return {

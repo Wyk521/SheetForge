@@ -121,6 +121,22 @@ beforeEach(() => {
 });
 
 describe("字段规则和来源", () => {
+  it("移除确认期间追加并排序来源后仍移除原来选中的 Sheet", async () => {
+    const store = useMergeStore();
+    await store.initEvents();
+    store.sources = [table("B.xlsx"), table("C.xlsx"), table("C.xlsx", "Sheet2")];
+    const confirmation = deferred<string>();
+    native.confirm.mockReturnValueOnce(confirmation.promise);
+    const removal = store.removeSource(1);
+    native.open.mockResolvedValueOnce(["A.xlsx"]);
+    await store.chooseFiles();
+    await emit("scan-finished", { tables: [table("A.xlsx")], warnings: [] });
+    confirmation.resolve("confirm");
+    await removal;
+    expect(store.sources.map((source) => [source.path, source.sheet_name])).toEqual([
+      ["A.xlsx", "Sheet1"], ["B.xlsx", "Sheet1"], ["C.xlsx", "Sheet2"],
+    ]);
+  });
   it("表头换行归一化保留普通空格语义", () => {
     expect(headerKey(" A\r\nB ")).toBe("ab");
     expect(headerKey("A B")).toBe("a b");
