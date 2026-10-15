@@ -385,6 +385,9 @@ export function createTaskActions(
       phase.value = "ready";
       progress.value = 1;
       progressLabel.value = `已识别 ${sources.value.length} 个数据表`;
+      if (warnings.value.length > 0) {
+        progressLabel.value += `，${warnings.value.length} 个扫描提醒，请查看检查报告`;
+      }
       void refreshPlan();
     });
     await on("scan-failed", (e) => {
@@ -508,7 +511,7 @@ export function createTaskActions(
         await confirmMerge();
       } else {
         phase.value = "ready";
-        const warnCount = e.payload.issues.filter(
+        const warnCount = warnings.value.length + e.payload.issues.filter(
           (i) => i.level === "Warning",
         ).length;
         progressLabel.value = `检查完成：${errors.length} 个错误，${warnCount} 个提醒`;

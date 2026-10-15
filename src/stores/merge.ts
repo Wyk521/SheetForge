@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed, onScopeDispose } from "vue";
 import { createEventScope } from "./event-scope";
 import type { WorkflowCallbacks } from "./merge/context";
+import type { CheckIssue } from "../types";
 export type { AppPhase } from "./merge/context";
 export { headerKey } from "./merge/utils";
 export type { FieldGroup, FieldGroupSource } from "./merge/utils";
@@ -68,6 +69,10 @@ export const useMergeStore = defineStore("merge", () => {
   const activePage = ref(0);
   const showAbout = ref(false);
   const busy = computed(() => phase.value !== "ready");
+  const reportIssues = computed<CheckIssue[]>(() => [
+    ...warnings.value.map((detail) => ({ level: "Warning" as const, title: "扫描提醒", detail })),
+    ...checkIssues.value,
+  ]);
   const callbacks: WorkflowCallbacks = {
     refreshPlan: () => mapping.refreshPlan(),
     clearMergedPreview: () => previewDomain.clearMergedPreview(),
@@ -186,6 +191,7 @@ export const useMergeStore = defineStore("merge", () => {
     preview,
     previewTitle,
     settings,
+    reportIssues,
     updateText,
     updateAvailable,
     updateDialogVisible,

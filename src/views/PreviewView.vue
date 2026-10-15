@@ -12,10 +12,10 @@ const previewGridHost = ref<HTMLElement | null>(null);
 const previewMaxHeight = ref<number>();
 let contentResizeObserver: ResizeObserver | undefined;
 
-const errorCount = computed(() => store.checkIssues.filter((i) => i.level === "Error").length);
-const warnCount = computed(() => store.checkIssues.filter((i) => i.level === "Warning").length);
+const errorCount = computed(() => store.reportIssues.filter((i) => i.level === "Error").length);
+const warnCount = computed(() => store.reportIssues.filter((i) => i.level === "Warning").length);
 const checkSummary = computed(() => {
-  if (store.checkIssues.length === 0) {
+  if (store.reportIssues.length === 0) {
     return store.checkRan ? "检查完成：未发现问题" : "尚未检查";
   }
   return `检查完成：${errorCount.value} 个错误，${warnCount.value} 个提醒`;
@@ -83,7 +83,7 @@ onUnmounted(() => {
 });
 
 async function exportReport() {
-  const text = store.checkIssues
+  const text = store.reportIssues
     .map((issue) => `[${issue.level}] ${issue.title}\n${issue.detail}`)
     .join("\n\n");
   try {
@@ -134,7 +134,7 @@ async function exportReport() {
 
     <template v-else>
       <div class="sf-check-toolbar">
-        <span class="sf-check-summary" :class="{ 'is-clear': store.checkRan && store.checkIssues.length === 0 }">
+        <span class="sf-check-summary" :class="{ 'is-clear': store.checkRan && store.reportIssues.length === 0 }">
           {{ checkSummary }}
         </span>
         <div class="sf-toolbar-actions">
@@ -143,7 +143,7 @@ async function exportReport() {
         </div>
       </div>
       <div class="sf-issue-list">
-        <el-card v-for="(issue, index) in store.checkIssues" :key="index" class="sf-issue-card" shadow="never">
+        <el-card v-for="(issue, index) in store.reportIssues" :key="index" class="sf-issue-card" shadow="never">
           <div class="sf-issue-row">
             <el-tag :type="levelTag(issue.level) as any" size="small">{{ levelLabel(issue.level) }}</el-tag>
             <div>
@@ -152,7 +152,7 @@ async function exportReport() {
             </div>
           </div>
         </el-card>
-        <div v-if="store.checkIssues.length === 0 && store.checkRan" class="sf-check-empty">
+        <div v-if="store.reportIssues.length === 0 && store.checkRan" class="sf-check-empty">
           未发现问题
         </div>
       </div>

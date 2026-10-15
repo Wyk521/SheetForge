@@ -259,6 +259,24 @@ describe("预览请求", () => {
 });
 
 describe("处理任务", () => {
+  it("扫描失败详情保留在检查报告中，修改规则和重新检查不会丢失", async () => {
+    const store = useMergeStore();
+    await store.initEvents();
+    await store.scanFiles(["正常.csv", "损坏.xlsx"]);
+    await emit("scan-finished", {
+      tables: [table("正常.csv")], warnings: ["损坏.xlsx：无法读取工作簿"],
+    });
+    expect(store.progressLabel).toContain("1 个扫描提醒");
+    expect(store.reportIssues).toContainEqual({
+      level: "Warning", title: "扫描提醒", detail: "损坏.xlsx：无法读取工作簿",
+    });
+    store.setAdvanced({ deduplicate: true });
+    await store.runPreflight();
+    await emit("preflight-done", { issues: [], continues_merge: false });
+    expect(store.reportIssues).toHaveLength(1);
+    expect(store.reportIssues[0].detail).toContain("损坏.xlsx");
+    expect(store.progressLabel).toBe("检查完成：0 个错误，1 个提醒");
+  });
   it("后台完成先于命令确认返回时仍保持完成状态", async () => {
     const store = useMergeStore();
     await store.initEvents();
