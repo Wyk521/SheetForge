@@ -552,6 +552,7 @@ mod tests {
             hour: 0,
             minute: 0,
             second: 0,
+            millisecond: 0,
         };
         assert_eq!(date.as_text(), "2024-01-01");
         let datetime = CellValue::DateTime {
@@ -561,6 +562,7 @@ mod tests {
             hour: 6,
             minute: 30,
             second: 0,
+            millisecond: 0,
         };
         assert_eq!(datetime.as_text(), "2024-01-01 06:30:00");
 

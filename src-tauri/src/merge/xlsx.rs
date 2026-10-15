@@ -120,13 +120,16 @@ impl XlsxSink {
                     hour,
                     minute,
                     second,
+                    millisecond,
                 } => {
                     let datetime = ExcelDateTime::from_ymd(*year, *month, *day)?.and_hms(
                         *hour as u16,
                         *minute,
-                        *second,
+                        f64::from(*second) + f64::from(*millisecond) / 1000.0,
                     )?;
-                    let format = if *hour == 0 && *minute == 0 && *second == 0 {
+                    let format = if *millisecond > 0 {
+                        Format::new().set_num_format("yyyy-mm-dd hh:mm:ss.000")
+                    } else if *hour == 0 && *minute == 0 && *second == 0 {
                         Format::new().set_num_format("yyyy-mm-dd")
                     } else {
                         Format::new().set_num_format("yyyy-mm-dd hh:mm:ss")
@@ -142,13 +145,22 @@ impl XlsxSink {
                     hour,
                     minute,
                     second,
+                    millisecond,
                 } => {
-                    let time = ExcelDateTime::from_hms(*hour as u16, *minute, *second)?;
+                    let time = ExcelDateTime::from_hms(
+                        *hour as u16,
+                        *minute,
+                        f64::from(*second) + f64::from(*millisecond) / 1000.0,
+                    )?;
                     worksheet.write_datetime_with_format(
                         excel_row,
                         column as u16,
                         &time,
-                        &Format::new().set_num_format("hh:mm:ss"),
+                        &Format::new().set_num_format(if *millisecond > 0 {
+                            "hh:mm:ss.000"
+                        } else {
+                            "hh:mm:ss"
+                        }),
                     )?;
                 }
             }

@@ -155,12 +155,14 @@ pub(crate) enum CellValue {
         hour: u8,
         minute: u8,
         second: u8,
+        millisecond: u16,
     },
     /// 仅含时间的单元格（Excel 序列值小于 1），如 08:30。
     Time {
         hour: u8,
         minute: u8,
         second: u8,
+        millisecond: u16,
     },
 }
 
@@ -183,7 +185,8 @@ impl CellValue {
                 hour,
                 minute,
                 second,
-            } if *hour == 0 && *minute == 0 && *second == 0 => {
+                millisecond,
+            } if *hour == 0 && *minute == 0 && *second == 0 && *millisecond == 0 => {
                 Some(Cow::Owned(format!("{year:04}-{month:02}-{day:02}")))
             }
             Self::DateTime {
@@ -193,14 +196,27 @@ impl CellValue {
                 hour,
                 minute,
                 second,
-            } => Some(Cow::Owned(format!(
-                "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"
-            ))),
+                millisecond,
+            } => {
+                let mut text =
+                    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}");
+                if *millisecond > 0 {
+                    text.push_str(&format!(".{millisecond:03}"));
+                }
+                Some(Cow::Owned(text))
+            }
             Self::Time {
                 hour,
                 minute,
                 second,
-            } => Some(Cow::Owned(format!("{hour:02}:{minute:02}:{second:02}"))),
+                millisecond,
+            } => {
+                let mut text = format!("{hour:02}:{minute:02}:{second:02}");
+                if *millisecond > 0 {
+                    text.push_str(&format!(".{millisecond:03}"));
+                }
+                Some(Cow::Owned(text))
+            }
         }
     }
     pub(super) fn as_text(&self) -> String {
@@ -230,12 +246,14 @@ impl CellValue {
                 if v.is_duration() {
                     Self::Text(v.as_f64().to_string())
                 } else {
-                    let (year, month, day, hour, minute, second, _millis) = v.to_ymd_hms_milli();
+                    let (year, month, day, hour, minute, second, millisecond) =
+                        v.to_ymd_hms_milli();
                     if (0.0..1.0).contains(&v.as_f64()) {
                         return Self::Time {
                             hour,
                             minute,
                             second,
+                            millisecond,
                         };
                     }
                     Self::DateTime {
@@ -245,6 +263,7 @@ impl CellValue {
                         hour,
                         minute,
                         second,
+                        millisecond,
                     }
                 }
             }

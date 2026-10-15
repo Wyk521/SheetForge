@@ -127,6 +127,58 @@ fn csv_encoding_handles_split_utf8_and_gbk_after_a_large_ascii_prefix() {
 }
 
 #[test]
+fn fractional_times_survive_output_and_deduplication() {
+    let dir = tempfile::tempdir().unwrap();
+    for base in [0.0, 45_292.0] {
+        let path = dir.path().join("fractional.xlsx");
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        sheet.write_string(0, 0, "时间戳").unwrap();
+        let format = Format::new().set_num_format("yyyy-mm-dd hh:mm:ss.000");
+        for (i, millis) in [125, 875].iter().enumerate() {
+            let serial = base + (45_296.0 + f64::from(*millis) / 1000.0) / 86_400.0;
+            sheet
+                .write_number_with_format(i as u32 + 1, 0, serial, &format)
+                .unwrap();
+        }
+        workbook.save(&path).unwrap();
+        let (tables, _) = scan_file(&path).unwrap();
+        for mode in [MergeMode::Manual, MergeMode::Intersection] {
+            for deduplicate in [false, true] {
+                let options = MergeOptions {
+                    mode,
+                    deduplicate,
+                    ..Default::default()
+                };
+                let preview = preview_merged(&tables, &options, 10).unwrap();
+                assert_eq!(preview.groups[0].rows.len(), 2);
+                assert!(preview.groups[0].rows[0][0].ends_with("12:34:56.125"));
+                assert!(preview.groups[0].rows[1][0].ends_with("12:34:56.875"));
+                let output = dir.path().join("output.xlsx");
+                let result = merge_tables(
+                    &tables,
+                    &options,
+                    &output,
+                    &|_, _, _| {},
+                    &AtomicBool::new(false),
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(result.rows, 2);
+                let mut workbook = open_workbook_auto(&output).unwrap();
+                let range = workbook.worksheet_range("合并结果_001").unwrap();
+                for (row, millis) in [(1, 125), (2, 875)] {
+                    let Data::DateTime(value) = range.get_value((row, 0)).unwrap() else {
+                        panic!("expected date/time value")
+                    };
+                    assert_eq!(value.to_ymd_hms_milli().6, millis);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn html_export_with_xls_extension_scans_and_merges() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("网页导出.xls");
