@@ -1,8 +1,8 @@
 use crate::merge::{preview_mapped_row, CellValue};
 use crate::model::{build_output_plan, header_key, MergeOptions, SourceKind, SourceTable};
 use crate::scan::{
-    decode_csv_field, for_each_xlsx_row, is_markup_workbook, is_xlsx_path, open_detected_workbook,
-    open_xlsx_workbook, read_markup_workbook,
+    csv_encoding, decode_csv_field, for_each_xlsx_row, is_markup_workbook, is_xlsx_path,
+    open_detected_workbook, open_xlsx_workbook, read_markup_workbook,
 };
 use anyhow::{Context, Result};
 use calamine::{open_workbook_auto, Data, Reader};
@@ -48,6 +48,7 @@ pub fn preview_source(table: &SourceTable, limit: usize) -> Result<PreviewTable>
     let mut rows = Vec::new();
     match table.kind {
         SourceKind::Csv { delimiter } => {
+            let encoding = csv_encoding(&table.path)?;
             let mut reader = ReaderBuilder::new()
                 .has_headers(false)
                 .flexible(true)
@@ -55,7 +56,12 @@ pub fn preview_source(table: &SourceTable, limit: usize) -> Result<PreviewTable>
                 .from_path(&table.path)?;
             let skip = table.header_row + table.header_rows - 1;
             for record in reader.byte_records().skip(skip).take(limit) {
-                rows.push(record?.iter().map(decode_csv_field).collect());
+                rows.push(
+                    record?
+                        .iter()
+                        .map(|field| decode_csv_field(field, encoding))
+                        .collect(),
+                );
             }
         }
         SourceKind::Workbook => {
@@ -147,6 +153,7 @@ fn preview_source_values(table: &SourceTable, limit: usize) -> Result<Vec<Vec<Ce
     let mut rows = Vec::new();
     match table.kind {
         SourceKind::Csv { delimiter } => {
+            let encoding = csv_encoding(&table.path)?;
             let mut reader = ReaderBuilder::new()
                 .has_headers(false)
                 .flexible(true)
@@ -157,7 +164,7 @@ fn preview_source_values(table: &SourceTable, limit: usize) -> Result<Vec<Vec<Ce
                 rows.push(
                     record?
                         .iter()
-                        .map(|value| CellValue::Text(decode_csv_field(value)))
+                        .map(|value| CellValue::Text(decode_csv_field(value, encoding)))
                         .collect(),
                 );
             }
@@ -512,6 +519,7 @@ pub fn validate_csv(
     header_width: usize,
     max_rows: usize,
 ) -> Result<CsvCheck> {
+    let encoding = csv_encoding(path)?;
     let mut reader = ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -532,7 +540,7 @@ pub fn validate_csv(
         check.rows += 1;
         let mut wider = false;
         for (index, field) in record.iter().enumerate() {
-            let value = decode_csv_field(field);
+            let value = decode_csv_field(field, encoding);
             wider |= index >= header_width && !value.trim().is_empty();
         }
         if wider {

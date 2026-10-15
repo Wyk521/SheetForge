@@ -3,7 +3,7 @@ use crate::model::make_default_mappings;
 use crate::model::{SourceKind, SourceTable};
 use anyhow::{Context, Result};
 use csv::{ByteRecord, ReaderBuilder};
-use encoding_rs::GBK;
+use encoding_rs::{Encoding, GBK, UTF_8};
 use std::path::Path;
 use std::{
     fs::File,
@@ -11,37 +11,54 @@ use std::{
 };
 const SAMPLE_BYTES: usize = 256 * 1024;
 const EXACT_COUNT_LIMIT: u64 = 64 * 1024 * 1024;
-pub(super) fn csv_encoding_suspicious(path: &Path, delimiter: u8) -> bool {
-    let Ok(mut reader) = ReaderBuilder::new()
+pub(crate) fn csv_encoding(path: &Path) -> Result<&'static Encoding> {
+    let mut file = File::open(path)?;
+    let mut decoder = UTF_8.new_decoder_without_bom_handling();
+    let mut input = [0; 8192];
+    // 足够容纳整个输入块及跨块字符，即使无效字节被展开为替换字符。
+    let mut output = [0; 32768];
+    loop {
+        let read = file.read(&mut input)?;
+        let (_, _, _, malformed) = decoder.decode_to_utf8(&input[..read], &mut output, read == 0);
+        if malformed {
+            return Ok(GBK);
+        }
+        if read == 0 {
+            return Ok(UTF_8);
+        }
+    }
+}
+
+pub(super) fn csv_encoding_suspicious(path: &Path, delimiter: u8) -> Result<bool> {
+    let encoding = csv_encoding(path)?;
+    let mut reader = ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
         .delimiter(delimiter)
-        .from_path(path)
-    else {
-        return false;
-    };
+        .from_path(path)?;
     let mut record = ByteRecord::new();
     let mut checked = 0;
-    while checked < 50 && reader.read_byte_record(&mut record).unwrap_or(false) {
+    while checked < 50 && reader.read_byte_record(&mut record)? {
         if record
             .iter()
-            .any(|field| decode_csv_field_with_quality(field).1)
+            .any(|field| decode_csv_field_with_quality(field, encoding).1)
         {
-            return true;
+            return Ok(true);
         }
         checked += 1;
     }
-    false
+    Ok(false)
 }
 
 pub(super) fn scan_csv_auto(path: &Path) -> Result<SourceTable> {
+    let encoding = csv_encoding(path)?;
     let delimiter = detect_delimiter(path)?;
     let sample = sample_csv_records(path, delimiter, AUTO_HEADER_ROWS + 4)?;
-    let suggested = recommend_header(
-        sample
-            .iter()
-            .map(|row| row.iter().map(decode_csv_field).collect::<Vec<_>>()),
-    ) + 1;
+    let suggested = recommend_header(sample.iter().map(|row| {
+        row.iter()
+            .map(|field| decode_csv_field(field, encoding))
+            .collect::<Vec<_>>()
+    })) + 1;
     scan_csv(path, delimiter, suggested, 1, suggested)
 }
 
@@ -52,6 +69,7 @@ pub(super) fn scan_csv(
     header_rows: usize,
     suggested_header_row: usize,
 ) -> Result<SourceTable> {
+    let encoding = csv_encoding(path)?;
     let header_row = header_row.max(1);
     let header_rows = header_rows.clamp(1, 3);
     let mut reader = ReaderBuilder::new()
@@ -71,7 +89,12 @@ pub(super) fn scan_csv(
         if !reader.read_byte_record(&mut record)? {
             anyhow::bail!("CSV 不足 {} 行，无法读取多行表头", header_row + offset);
         }
-        header_parts.push(record.iter().map(decode_csv_field).collect::<Vec<_>>());
+        header_parts.push(
+            record
+                .iter()
+                .map(|field| decode_csv_field(field, encoding))
+                .collect::<Vec<_>>(),
+        );
     }
     let headers = combine_header_rows(&header_parts);
     let estimated_rows = count_remaining_csv_rows(path, delimiter, header_row + header_rows - 1)?;
@@ -193,18 +216,15 @@ pub fn detect_delimiter(path: &Path) -> Result<u8> {
     Ok(best.1)
 }
 
-pub fn decode_csv_field(bytes: &[u8]) -> String {
-    decode_csv_field_with_quality(bytes).0
+pub fn decode_csv_field(bytes: &[u8], encoding: &'static Encoding) -> String {
+    decode_csv_field_with_quality(bytes, encoding).0
 }
 
 /// 解码 CSV 字段，同时返回解码质量：为 true 表示出现了替换字符（U+FFFD），
 /// 通常是文件既非 UTF-8 也非 GBK 编码的信号。
-pub fn decode_csv_field_with_quality(bytes: &[u8]) -> (String, bool) {
+pub fn decode_csv_field_with_quality(bytes: &[u8], encoding: &'static Encoding) -> (String, bool) {
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    if let Ok(value) = std::str::from_utf8(bytes) {
-        return (value.to_owned(), false);
-    }
-    let (value, _, had_errors) = GBK.decode(bytes);
+    let (value, _, had_errors) = encoding.decode(bytes);
     (value.into_owned(), had_errors)
 }
 
@@ -218,6 +238,7 @@ pub fn for_each_csv_row<F>(
 where
     F: FnMut(Vec<String>) -> Result<()>,
 {
+    let encoding = csv_encoding(path)?;
     let mut reader = ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -230,7 +251,12 @@ where
         }
     }
     while reader.read_byte_record(&mut record)? {
-        callback(record.iter().map(decode_csv_field).collect())?;
+        callback(
+            record
+                .iter()
+                .map(|field| decode_csv_field(field, encoding))
+                .collect(),
+        )?;
     }
     Ok(())
 }

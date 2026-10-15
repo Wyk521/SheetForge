@@ -68,11 +68,9 @@ fn csv_bom_and_gbk_are_decoded_and_merged() {
     // UTF-8 带 BOM
     let utf8 = scan_csv(&dir, "utf8.csv", "\u{feff}姓名,金额\n张三,100\n");
     // GBK 编码
-    let (gbk_bytes, _, _) = encoding_rs::GBK.encode("李四,200");
+    let (gbk_bytes, _, _) = encoding_rs::GBK.encode("姓名,金额\n李四,200\n");
     let gbk_path = dir.path().join("gbk.csv");
-    let mut content = "姓名,金额\n".as_bytes().to_vec();
-    content.extend_from_slice(&gbk_bytes);
-    std::fs::write(&gbk_path, content).unwrap();
+    std::fs::write(&gbk_path, gbk_bytes).unwrap();
     let (tables, _) = scan_file(&gbk_path).unwrap();
     let gbk = tables.into_iter().next().unwrap();
 
@@ -90,6 +88,42 @@ fn csv_bom_and_gbk_are_decoded_and_merged() {
         data.contains(&vec!["李四".to_owned(), "200".to_owned()]),
         "GBK 中文应正确解码"
     );
+}
+
+#[test]
+fn gbk_fields_that_are_valid_utf8_keep_their_chinese_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gbk.csv");
+    let (bytes, _, _) = encoding_rs::GBK.encode("姓名,备注\n张三,漏\n李四,品\n");
+    std::fs::write(&path, bytes).unwrap();
+    let (tables, warnings) = scan_file(&path).unwrap();
+    assert!(warnings.is_empty());
+    let preview = preview_merged(&tables, &MergeOptions::default(), 10).unwrap();
+    assert_eq!(
+        preview.groups[0].rows,
+        vec![vec!["张三", "漏"], vec!["李四", "品"]]
+    );
+    assert_eq!(
+        crate::inspect::preview_source(&tables[0], 10).unwrap().rows,
+        preview.groups[0].rows
+    );
+    let rows = merge_and_read(tables, MergeOptions::default());
+    assert_eq!(&rows[1..], preview.groups[0].rows);
+}
+
+#[test]
+fn csv_encoding_handles_split_utf8_and_gbk_after_a_large_ascii_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("encoding.csv");
+    std::fs::write(&path, "甲".repeat(100_000)).unwrap();
+    assert_eq!(
+        crate::scan::csv_encoding(&path).unwrap(),
+        encoding_rs::UTF_8
+    );
+    let mut bytes = vec![b'a'; 300_000];
+    bytes.extend_from_slice(&encoding_rs::GBK.encode("张三").0);
+    std::fs::write(&path, bytes).unwrap();
+    assert_eq!(crate::scan::csv_encoding(&path).unwrap(), encoding_rs::GBK);
 }
 
 #[test]

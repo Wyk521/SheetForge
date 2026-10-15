@@ -1,6 +1,6 @@
 use super::csv::decode_csv_field;
 use anyhow::{bail, Context, Result};
-use encoding_rs::{UTF_16BE, UTF_16LE};
+use encoding_rs::{GBK, UTF_16BE, UTF_16LE, UTF_8};
 use std::{fs::File, io::Read, path::Path};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WorkbookFormat {
@@ -88,5 +88,10 @@ pub(super) fn decode_markup_document(bytes: &[u8]) -> String {
     if let Some(bytes) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         return UTF_16BE.decode(bytes).0.into_owned();
     }
-    decode_csv_field(bytes)
+    let encoding = if std::str::from_utf8(bytes).is_ok() {
+        UTF_8
+    } else {
+        GBK
+    };
+    decode_csv_field(bytes, encoding)
 }

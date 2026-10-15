@@ -9,6 +9,7 @@ mod workbook;
 
 use self::csv::{csv_encoding_suspicious, scan_csv, scan_csv_auto};
 // Keep the original module surface for callers while implementations live in domains.
+pub(crate) use self::csv::csv_encoding;
 #[allow(unused_imports)]
 pub use self::csv::{
     decode_csv_field, decode_csv_field_with_quality, detect_delimiter, for_each_csv_row,
@@ -48,7 +49,7 @@ pub fn scan_file(path: &Path) -> Result<(Vec<SourceTable>, Vec<String>)> {
                 SourceKind::Workbook => return Ok((vec![table], Vec::new())),
             };
             let mut warnings = Vec::new();
-            if csv_encoding_suspicious(path, delimiter) {
+            if csv_encoding_suspicious(path, delimiter)? {
                 warnings.push(format!(
                     "{}：文件编码可能不是 UTF-8 或 GBK，部分字符无法识别",
                     path.display()
