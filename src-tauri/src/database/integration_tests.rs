@@ -212,7 +212,10 @@ fn postgres_integration_typed_workbooks_match_xlsx_in_both_modes() {
                 .write_datetime_with_format(
                     1,
                     3,
-                    ExcelDateTime::from_ymd(2024, 1, 15).unwrap(),
+                    ExcelDateTime::from_ymd(2024, 1, 15)
+                        .unwrap()
+                        .and_hms(0, 0, if name == "b" { 0.875 } else { 0.0 })
+                        .unwrap(),
                     &Format::new().set_num_format("yyyy-mm-dd"),
                 )
                 .unwrap();
@@ -220,8 +223,8 @@ fn postgres_integration_typed_workbooks_match_xlsx_in_both_modes() {
                 .write_datetime_with_format(
                     1,
                     4,
-                    ExcelDateTime::from_hms(8, 30, 15.0).unwrap(),
-                    &Format::new().set_num_format("hh:mm:ss"),
+                    ExcelDateTime::from_hms(8, 30, 15.125).unwrap(),
+                    &Format::new().set_num_format("hh:mm:ss.000"),
                 )
                 .unwrap();
             sheet.write_boolean(1, 5, true).unwrap();
@@ -301,7 +304,8 @@ fn postgres_integration_typed_workbooks_match_xlsx_in_both_modes() {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(expected[0][3].as_deref(), Some("2024-01-15"));
-            assert_eq!(expected[0][4].as_deref(), Some("08:30:15"));
+            assert_eq!(expected[1][3].as_deref(), Some("2024-01-15 00:00:00.875"));
+            assert_eq!(expected[0][4].as_deref(), Some("08:30:15.125"));
             for format in ["binary", "text"] {
                 let name = format!("{label}_{format}");
                 let summary = db
