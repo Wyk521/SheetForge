@@ -197,6 +197,28 @@ fn html_export_with_xls_extension_scans_and_merges() {
 }
 
 #[test]
+fn html_rowspan_reserves_columns_until_the_merge_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rowspan.xls");
+    std::fs::write(
+        &path,
+        "<html><body><table>
+        <tr><th>部门</th><th>备用</th><th>姓名</th><th>金额</th></tr>
+        <tr><td rowspan='2' colspan='2'>销售</td><td>张三</td><td>100</td></tr>
+        <tr><td>李四</td><td>200</td></tr>
+        <tr><td>财务</td><td></td><td>王五</td><td>300</td></tr>
+        </table></body></html>",
+    )
+    .unwrap();
+    let (tables, warnings) = scan_file(&path).unwrap();
+    assert!(warnings.is_empty());
+    let rows = merge_and_read(tables, MergeOptions::default());
+    assert_eq!(rows[1], vec!["销售", "", "张三", "100"]);
+    assert_eq!(rows[2], vec!["", "", "李四", "200"]);
+    assert_eq!(rows[3], vec!["财务", "", "王五", "300"]);
+}
+
+#[test]
 fn long_numbers_and_leading_zeros_stay_text() {
     let dir = tempfile::tempdir().unwrap();
     let table = scan_csv(

@@ -36,13 +36,21 @@ pub(super) fn read_html_tables(html: &str) -> Result<Vec<MarkupSheet>> {
     let mut sheets = Vec::new();
     for (table_index, table) in document.select("table").iter().enumerate() {
         let mut rows = Vec::new();
-        for row in table.select("tr").iter() {
+        let mut occupied_until = Vec::new();
+        for (row_index, row) in table.select("tr").iter().enumerate() {
             let cells = row.children().filter("td, th");
             if cells.is_empty() {
                 continue;
             }
             let mut values = Vec::new();
             for cell in cells.iter() {
+                while occupied_until
+                    .get(values.len())
+                    .is_some_and(|end| *end > row_index)
+                {
+                    values.push(String::new());
+                }
+                let column = values.len();
                 let value = cell
                     .formatted_text()
                     .replace('\u{a0}', " ")
@@ -55,6 +63,15 @@ pub(super) fn read_html_tables(html: &str) -> Result<Vec<MarkupSheet>> {
                     .unwrap_or(1)
                     .clamp(1, 16_384);
                 values.extend(std::iter::repeat_n(String::new(), colspan - 1));
+                let rowspan = cell
+                    .attr("rowspan")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(1)
+                    .max(1);
+                occupied_until.resize(occupied_until.len().max(values.len()), 0);
+                for end in &mut occupied_until[column..values.len()] {
+                    *end = row_index.saturating_add(rowspan);
+                }
             }
             rows.push(values);
         }
