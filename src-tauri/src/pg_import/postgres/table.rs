@@ -185,7 +185,7 @@ async fn validate_append(
 ) -> Result<()> {
     let rows = transaction
         .query(
-            "SELECT a.attname, t.typname, a.attnotnull, d.oid IS NOT NULL
+            "SELECT a.attname, t.typname, a.attnotnull, (d.oid IS NOT NULL OR a.attidentity <> '')
              FROM pg_attribute a
              JOIN pg_class c ON c.oid = a.attrelid
              JOIN pg_namespace n ON n.oid = c.relnamespace

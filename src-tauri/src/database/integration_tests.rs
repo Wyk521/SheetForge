@@ -490,6 +490,50 @@ fn postgres_integration_append_validation_and_truncate_rollback() {
 
 #[test]
 #[ignore = "requires an isolated PostgreSQL 17 service"]
+fn postgres_integration_identity_columns_are_generated_when_omitted() {
+    run(async {
+        let db = Database::new().await;
+        let dir = tempfile::tempdir().unwrap();
+        let table = source(&dir, "identity.csv", "name\nAlice\n");
+        for (identity, clause) in [("always", "ALWAYS"), ("default", "BY DEFAULT")] {
+            for format in ["binary", "text"] {
+                for mode in ["append", "truncate"] {
+                    let name = format!("identity_{identity}_{format}_{mode}");
+                    db.client.batch_execute(&format!(
+                        "CREATE TABLE {schema}.{name}(id bigint GENERATED {clause} AS IDENTITY PRIMARY KEY, name text);
+                         INSERT INTO {schema}.{name}(name) VALUES ('keep')", schema = db.schema
+                    )).await.unwrap();
+                    let result = db
+                        .import(
+                            vec![table.clone()],
+                            MergeOptions::default(),
+                            db.request(&name, format, mode),
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(result.rows, 1);
+                    let rows = db
+                        .client
+                        .query(
+                            &format!("SELECT id, name FROM {}.{name} ORDER BY id", db.schema),
+                            &[],
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(rows.len(), if mode == "append" { 2 } else { 1 });
+                    let imported = rows.last().unwrap();
+                    assert!(imported.get::<_, i64>(0) > 0);
+                    assert_eq!(imported.get::<_, String>(1), "Alice");
+                }
+            }
+        }
+        db.cleanup().await;
+    });
+}
+
+#[test]
+#[ignore = "requires an isolated PostgreSQL 17 service"]
 fn postgres_integration_copy_failure_rolls_back_replace_and_truncate() {
     run(async {
         let db = Database::new().await;
