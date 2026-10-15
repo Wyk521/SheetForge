@@ -248,11 +248,24 @@ export function createTaskActions(
       phase.value = "ready";
     }
   }
+  let preflightInput: string;
+  function acceptPreflight() {
+    if (preflightInput === JSON.stringify([sources.value, options.value, outputDestination.value])) {
+      return true;
+    }
+    phase.value = "ready";
+    checkRan.value = false;
+    checkIssues.value = [];
+    progressLabel.value = "数据源或规则已修改，请重新检查后再开始";
+    ElMessage.warning(progressLabel.value);
+    return false;
+  }
   async function runPreflight(continuesMerge = false) {
     if (busy.value) return;
     phase.value = "checking";
     progress.value = 0;
     progressLabel.value = "正在执行处理前检查…";
+    preflightInput = JSON.stringify([sources.value, options.value, outputDestination.value]);
     try {
       await invoke("run_preflight", {
         tables: sources.value,
@@ -267,6 +280,7 @@ export function createTaskActions(
     }
   }
   async function confirmMerge() {
+    if (!acceptPreflight()) return;
     phase.value = "merging";
     progress.value = 0;
     progressLabel.value =
@@ -451,6 +465,7 @@ export function createTaskActions(
       ElMessage.error(`合并失败：${e.payload.message}`);
     });
     await on("preflight-done", async (e) => {
+      if (!acceptPreflight()) return;
       checkIssues.value = e.payload.issues;
       checkRan.value = true;
       const errors = e.payload.issues.filter((i) => i.level === "Error");

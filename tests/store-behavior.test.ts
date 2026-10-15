@@ -262,6 +262,7 @@ describe("处理任务", () => {
   it("后台完成先于命令确认返回时仍保持完成状态", async () => {
     const store = useMergeStore();
     await store.initEvents();
+    await store.runPreflight(true);
     store.outputPath = "结果.xlsx";
     native.invoke.mockImplementation(async (command) => {
       if (command === "path_exists") return false;
@@ -281,6 +282,7 @@ describe("处理任务", () => {
     const store = useMergeStore();
     await store.initEvents();
     store.outputDestination = "postgres";
+    await store.runPreflight(true);
     native.invoke.mockRejectedValueOnce(new Error("启动失败"));
     await emit("preflight-done", { issues: [], continues_merge: true });
     expect(store.phase).toBe("ready");
@@ -358,6 +360,7 @@ describe("处理任务", () => {
     const store = useMergeStore();
     await store.initEvents();
     store.outputPath = "结果.xlsx";
+    await store.startMerge();
     native.invoke.mockResolvedValueOnce(true);
     native.confirm.mockRejectedValueOnce("cancel");
     await emit("preflight-done", { issues: [], continues_merge: true });
@@ -391,10 +394,46 @@ describe("处理任务", () => {
       table: "结果",
       if_exists: "truncate",
     };
+    await store.runPreflight(true);
     await emit("preflight-done", { issues: [], continues_merge: true });
     expect(native.confirm).toHaveBeenCalled();
     expect(called("start_database_import")[0][1].request.table).toBe("结果");
     expect(store.phase).toBe("merging");
+  });
+  it("检查期间改动规则会阻止写出，重新检查后才使用新规则", async () => {
+    const store = useMergeStore();
+    await store.initEvents();
+    store.sources = [table()];
+    store.outputPath = "结果.xlsx";
+    store.options.filter_column = "姓名";
+    store.options.filter_text = "Alice";
+    await store.startMerge();
+    store.setAdvanced({ filter_column: "不存在的列" });
+    await emit("preflight-done", { issues: [], continues_merge: true });
+    expect(called("start_merge")).toHaveLength(0);
+    expect(store.phase).toBe("ready");
+    expect(store.checkRan).toBe(false);
+    expect(native.warning).toHaveBeenCalledWith("数据源或规则已修改，请重新检查后再开始");
+    store.setAdvanced({ filter_column: "姓名", filter_text: "Bob" });
+    await store.startMerge();
+    await emit("preflight-done", { issues: [], continues_merge: true });
+    expect(called("start_merge")[0][1].options.filter_text).toBe("Bob");
+  });
+  it("覆盖确认期间修改规则也会作废检查", async () => {
+    const store = useMergeStore();
+    await store.initEvents();
+    store.outputPath = "结果.xlsx";
+    await store.startMerge();
+    native.invoke.mockResolvedValueOnce(true);
+    const confirmation = deferred<string>();
+    native.confirm.mockReturnValueOnce(confirmation.promise);
+    const pending = emit("preflight-done", { issues: [], continues_merge: true });
+    await vi.waitFor(() => expect(native.confirm).toHaveBeenCalled());
+    store.setAdvanced({ deduplicate: true });
+    confirmation.resolve("confirm");
+    await pending;
+    expect(called("start_merge")).toHaveLength(0);
+    expect(store.checkRan).toBe(false);
   });
   it("取消后等待后台结束事件才解除忙碌", async () => {
     const store = useMergeStore();
