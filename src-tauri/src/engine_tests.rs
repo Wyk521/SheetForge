@@ -112,6 +112,27 @@ fn gbk_fields_that_are_valid_utf8_keep_their_chinese_text() {
 }
 
 #[test]
+fn quoted_semicolons_do_not_replace_the_csv_delimiter_or_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(
+        &dir,
+        "quoted.csv",
+        "编号,备注\n1,\"甲;乙;丙;丁;戊;己\"\n2,\"甲;乙;丙;丁;戊;己\"\n3,\"甲;乙;丙;丁;戊;己\"\n",
+    );
+    assert_eq!(table.headers, vec!["编号", "备注"]);
+    let rows = merge_and_read(vec![table], MergeOptions::default());
+    assert_eq!(
+        rows,
+        vec![
+            vec!["编号", "备注"],
+            vec!["1", "甲;乙;丙;丁;戊;己"],
+            vec!["2", "甲;乙;丙;丁;戊;己"],
+            vec!["3", "甲;乙;丙;丁;戊;己"]
+        ]
+    );
+}
+
+#[test]
 fn csv_encoding_handles_split_utf8_and_gbk_after_a_large_ascii_prefix() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("encoding.csv");

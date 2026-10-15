@@ -206,9 +206,8 @@ pub fn detect_delimiter(path: &Path) -> Result<u8> {
         // multiple columns; genuinely single-column files still fall back to
         // the first candidate (comma).
         let single_column_penalty = if mode_width == 1 { 10_000 } else { 0 };
-        let score = consistent as i64 * 100 + mode_width as i64 * 50
-            - widths.len() as i64
-            - single_column_penalty;
+        // 更多列不代表更可信：错误分隔符可能拆开引号字段内的文本。
+        let score = consistent as i64 * 100 - widths.len() as i64 - single_column_penalty;
         if score > best.0 {
             best = (score, delimiter);
         }
