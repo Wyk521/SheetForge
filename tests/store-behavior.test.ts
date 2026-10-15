@@ -364,6 +364,23 @@ describe("处理任务", () => {
     expect(called("start_merge")).toHaveLength(0);
     expect(store.phase).toBe("ready");
   });
+  it("输出路径去除首尾空白后再检查覆盖并写入同一位置", async () => {
+    const store = useMergeStore();
+    await store.initEvents();
+    const output = "C:\\数据\\结果.xlsx";
+    store.outputPath = ` ${output} `;
+    const original = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation(async (command, args) =>
+      command === "path_exists" ? args.path === output : original(command, args),
+    );
+    await store.startMerge();
+    await emit("preflight-done", { issues: [], continues_merge: true });
+    expect(called("path_exists")[0][1].path).toBe(output);
+    expect(native.confirm).toHaveBeenCalledWith(
+      `${output} 已存在，是否覆盖？`, "覆盖已有文件", { type: "warning" },
+    );
+    expect(called("start_merge")[0][1].output).toBe(output);
+  });
   it("数据库清空须确认，开始命令携带本次目标", async () => {
     const store = useMergeStore();
     await store.initEvents();

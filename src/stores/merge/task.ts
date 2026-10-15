@@ -294,9 +294,12 @@ export function createTaskActions(
     }
   }
   async function startMerge() {
-    if (outputDestination.value === "xlsx" && !outputPath.value.trim()) {
-      ElMessage.error("请先选择输出文件");
-      return;
+    if (outputDestination.value === "xlsx") {
+      outputPath.value = outputPath.value.trim();
+      if (!outputPath.value) {
+        ElMessage.error("请先选择输出文件");
+        return;
+      }
     }
     if (outputDestination.value === "postgres" && !databaseReady.value) {
       openDatabaseTarget();
