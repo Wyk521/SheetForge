@@ -575,3 +575,73 @@ fn postgres_integration_cancel_after_copy_batch_rolls_back_and_can_retry() {
         db.cleanup().await;
     });
 }
+
+#[test]
+#[ignore = "requires an isolated PostgreSQL 17 service"]
+fn postgres_integration_cancel_while_server_finishes_copy_rolls_back() {
+    run(async {
+        let db = Database::new().await;
+        let dir = tempfile::tempdir().unwrap();
+        let table = source(&dir, "input.csv", "name\nAlice\n");
+        db.client
+            .batch_execute(&format!(
+                "CREATE FUNCTION {}.slow_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN PERFORM pg_sleep(1); RETURN NEW; END $$",
+                db.schema
+            ))
+            .await
+            .unwrap();
+        for format in ["binary", "text"] {
+            for mode in ["append", "truncate"] {
+                let name = format!("slow_{format}_{mode}");
+                db.client
+                    .batch_execute(&format!(
+                        "CREATE TABLE {schema}.{name}(name text);
+                     INSERT INTO {schema}.{name} VALUES ('keep');
+                     CREATE TRIGGER slow_insert BEFORE INSERT ON {schema}.{name}
+                     FOR EACH ROW EXECUTE FUNCTION {schema}.slow_insert()",
+                        schema = db.schema
+                    ))
+                    .await
+                    .unwrap();
+                let cancel = Arc::new(AtomicBool::new(false));
+                let import = import_database(
+                    vec![table.clone()],
+                    MergeOptions::default(),
+                    db.request(&name, format, mode),
+                    db.profile.clone(),
+                    Some(db.password.clone()),
+                    cancel.clone(),
+                    &|_, _, _| {},
+                );
+                let observe_and_cancel = async {
+                    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                        let query = format!("COPY \"{}\".\"{name}\"%", db.schema);
+                        loop {
+                            let waiting: bool = db.client.query_one(
+                                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE query LIKE $1 AND wait_event = 'PgSleep')",
+                                &[&query],
+                            ).await.unwrap().get(0);
+                            if waiting { break; }
+                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        }
+                        cancel.store(true, Ordering::Relaxed);
+                    }).await.expect("COPY must reach the server trigger before cancellation");
+                };
+                let (result, ()) = futures_util::future::join(import, observe_and_cancel).await;
+                assert!(
+                    result.unwrap().is_none(),
+                    "{format}/{mode} must cancel before commit"
+                );
+                let rows = db
+                    .client
+                    .query(&format!("SELECT name FROM {}.{name}", db.schema), &[])
+                    .await
+                    .unwrap();
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].get::<_, String>(0), "keep");
+            }
+        }
+        db.cleanup().await;
+    });
+}

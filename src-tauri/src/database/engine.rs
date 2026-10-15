@@ -260,6 +260,10 @@ pub(super) async fn import_database(
             "PostgreSQL COPY 确认行数异常：客户端发送 {rows} 行，服务器确认 {server_rows} 行"
         ));
     }
+    if cancel.load(Ordering::Relaxed) {
+        transaction.rollback().await?;
+        return Ok(None);
+    }
     transaction.commit().await?;
 
     emit(rows, rows, "PostgreSQL 已提交事务".to_owned());
