@@ -240,6 +240,32 @@ fn html_rowspan_reserves_columns_until_the_merge_ends() {
 }
 
 #[test]
+fn spreadsheet_xml_merge_across_preserves_following_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("merged.xml.xls");
+    std::fs::write(
+        &path,
+        r#"<?xml version="1.0"?>
+        <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+          xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+          <Worksheet ss:Name="数据"><Table>
+            <Row><Cell><Data ss:Type="String">姓名</Data></Cell><Cell><Data ss:Type="String">备用</Data></Cell><Cell><Data ss:Type="String">金额</Data></Cell></Row>
+            <Row><Cell ss:MergeAcross="1"><Data ss:Type="String">张三</Data></Cell><Cell><Data ss:Type="Number">100</Data></Cell></Row>
+            <Row><Cell ss:MergeAcross="1"/><Cell><Data ss:Type="Number">200</Data></Cell></Row>
+            <Row><Cell><Data ss:Type="String">李四</Data></Cell><Cell/><Cell><Data ss:Type="Number">300</Data></Cell></Row>
+          </Table></Worksheet>
+        </Workbook>"#,
+    )
+    .unwrap();
+    let (tables, warnings) = scan_file(&path).unwrap();
+    assert!(warnings.is_empty());
+    let rows = merge_and_read(tables, MergeOptions::default());
+    assert_eq!(rows[1], vec!["张三", "", "100"]);
+    assert_eq!(rows[2], vec!["", "", "200"]);
+    assert_eq!(rows[3], vec!["李四", "", "300"]);
+}
+
+#[test]
 fn long_numbers_and_leading_zeros_stay_text() {
     let dir = tempfile::tempdir().unwrap();
     let table = scan_csv(

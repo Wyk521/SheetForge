@@ -100,6 +100,7 @@ pub(super) fn read_spreadsheet_xml(xml: &str) -> Result<Vec<MarkupSheet>> {
     let mut current_sheet: Option<MarkupSheet> = None;
     let mut current_row: Option<Vec<String>> = None;
     let mut current_cell: Option<String> = None;
+    let mut merge_across = 0u16;
     let mut in_data = false;
 
     loop {
@@ -125,6 +126,11 @@ pub(super) fn read_spreadsheet_xml(xml: &str) -> Result<Vec<MarkupSheet>> {
                             row.push(String::new());
                         }
                     }
+                    merge_across = xml_attribute(&event, b"MergeAcross", reader.decoder())
+                        .map(|value| value.parse::<u16>())
+                        .transpose()
+                        .context("XML 单元格 MergeAcross 必须是有效的列数")?
+                        .unwrap_or(0);
                     current_cell = Some(String::new());
                 }
                 name if name.eq_ignore_ascii_case(b"Data") && current_cell.is_some() => {
@@ -144,10 +150,16 @@ pub(super) fn read_spreadsheet_xml(xml: &str) -> Result<Vec<MarkupSheet>> {
                         row.push(String::new());
                     }
                 }
-                current_row
-                    .as_mut()
-                    .expect("row checked above")
-                    .push(String::new());
+                let merge_across = xml_attribute(&event, b"MergeAcross", reader.decoder())
+                    .map(|value| value.parse::<u16>())
+                    .transpose()
+                    .context("XML 单元格 MergeAcross 必须是有效的列数")?
+                    .unwrap_or(0);
+                let row = current_row.as_mut().expect("row checked above");
+                row.extend(std::iter::repeat_n(
+                    String::new(),
+                    usize::from(merge_across) + 1,
+                ));
             }
             Event::Text(event) if in_data => {
                 let decoded = event.decode().context("无法解码 XML 单元格")?;
@@ -178,6 +190,10 @@ pub(super) fn read_spreadsheet_xml(xml: &str) -> Result<Vec<MarkupSheet>> {
                 name if name.eq_ignore_ascii_case(b"Cell") => {
                     if let (Some(row), Some(cell)) = (current_row.as_mut(), current_cell.take()) {
                         row.push(cell.trim().to_owned());
+                        row.extend(std::iter::repeat_n(
+                            String::new(),
+                            usize::from(merge_across),
+                        ));
                     }
                 }
                 name if name.eq_ignore_ascii_case(b"Row") => {
