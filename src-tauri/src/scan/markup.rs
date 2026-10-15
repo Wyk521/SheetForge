@@ -65,7 +65,9 @@ pub(super) fn read_html_tables(html: &str) -> Result<Vec<MarkupSheet>> {
                 values.extend(std::iter::repeat_n(String::new(), colspan - 1));
                 let rowspan = cell
                     .attr("rowspan")
-                    .and_then(|value| value.parse::<usize>().ok())
+                    .map(|value| value.parse::<usize>())
+                    .transpose()
+                    .context("HTML 单元格 rowspan 必须是有效的行数")?
                     .unwrap_or(1)
                     .max(1);
                 occupied_until.resize(occupied_until.len().max(values.len()), 0);

@@ -240,6 +240,19 @@ fn html_rowspan_reserves_columns_until_the_merge_ends() {
 }
 
 #[test]
+fn invalid_html_rowspan_returns_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("invalid-rowspan.xls");
+    std::fs::write(
+        &path,
+        "<html><table><tr><td rowspan='abc'>部门</td></tr></table></html>",
+    )
+    .unwrap();
+    let error = scan_file(&path).unwrap_err();
+    assert!(error.to_string().contains("rowspan"));
+}
+
+#[test]
 fn spreadsheet_xml_merge_across_preserves_following_columns() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("merged.xml.xls");
