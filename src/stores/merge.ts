@@ -104,7 +104,7 @@ export const useMergeStore = defineStore("merge", () => {
     openDatabaseConnections,
   } = database;
   const previewDomain = createPreviewActions(context);
-  const { showSourcePreview, closeSourcePreview, showMergedPreview } =
+  const { showSourcePreview, refreshSourcePreview, closeSourcePreview, showMergedPreview } =
     previewDomain;
   const mapping = createMappingActions(context);
   const {
@@ -115,6 +115,7 @@ export const useMergeStore = defineStore("merge", () => {
     moveOutputColumn,
     moveOutputColumnByName,
     setFieldTarget,
+    setSourceFieldTargets,
     setFieldEnabled,
     setFieldTransform,
     resetField,
@@ -241,10 +242,12 @@ export const useMergeStore = defineStore("merge", () => {
     moveOutputColumn,
     moveOutputColumnByName,
     setFieldTarget,
+    setSourceFieldTargets,
     setFieldEnabled,
     setFieldTransform,
     resetField,
     showSourcePreview,
+    refreshSourcePreview,
     closeSourcePreview,
     showMergedPreview,
     runPreflight,

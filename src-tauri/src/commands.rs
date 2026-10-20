@@ -161,8 +161,12 @@ pub fn reload_group(
 }
 
 #[tauri::command]
-pub fn preview_source(table: SourceTable, limit: usize) -> Result<PreviewTable, String> {
-    inspect_preview_source(&table, limit).map_err(|error| format!("{error:#}"))
+pub async fn preview_source(table: SourceTable, limit: usize) -> Result<PreviewTable, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        inspect_preview_source(&table, limit).map_err(|error| format!("{error:#}"))
+    })
+    .await
+    .map_err(|error| format!("预览读取任务失败：{error}"))?
 }
 
 #[tauri::command]

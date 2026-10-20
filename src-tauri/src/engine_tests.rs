@@ -63,6 +63,45 @@ fn merge_and_read(tables: Vec<SourceTable>, options: MergeOptions) -> Vec<Vec<St
 }
 
 #[test]
+fn source_preview_command_reads_on_the_background_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = scan_csv(&dir, "预览.csv", "姓名,金额\n张三,100\n李四,200\n");
+    let preview =
+        tauri::async_runtime::block_on(crate::commands::preview_source(table.clone(), 1)).unwrap();
+    assert_eq!(preview.headers, ["姓名", "金额"]);
+    assert_eq!(preview.rows, [vec!["张三", "100"]]);
+    let missing = SourceTable {
+        path: dir.path().join("不存在.csv"),
+        ..table
+    };
+    assert!(tauri::async_runtime::block_on(crate::commands::preview_source(missing, 1)).is_err());
+}
+
+#[test]
+fn same_named_fields_can_be_split_by_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut people = scan_csv(&dir, "人员.csv", "名称,单位\n张三, 公司甲 \n");
+    let mut goods = scan_csv(&dir, "商品.csv", "名称,单位\n苹果,箱\n");
+    people.mappings[1].target_name = "工作单位".to_owned();
+    people.mappings[1].transform = TransformOp::Trim;
+    goods.mappings[1].target_name = "计量单位".to_owned();
+    let tables = vec![people, goods];
+    let options = MergeOptions {
+        mode: MergeMode::Manual,
+        output_order: vec!["名称".into(), "计量单位".into(), "工作单位".into()],
+        ..Default::default()
+    };
+    let preview = preview_merged(&tables, &options, 5).unwrap();
+    assert_eq!(preview.headers, ["名称", "计量单位", "工作单位"]);
+    assert_eq!(preview.groups[0].rows, [vec!["张三", "", "公司甲"]]);
+    assert_eq!(preview.groups[1].rows, [vec!["苹果", "箱", ""]]);
+    let rows = merge_and_read(tables, options);
+    assert_eq!(rows[0], ["名称", "计量单位", "工作单位"]);
+    assert_eq!(rows[1], ["张三", "", "公司甲"]);
+    assert_eq!(rows[2], ["苹果", "箱", ""]);
+}
+
+#[test]
 fn csv_bom_and_gbk_are_decoded_and_merged() {
     let dir = tempfile::tempdir().unwrap();
     // UTF-8 带 BOM

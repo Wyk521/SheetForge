@@ -9,6 +9,7 @@ import {
 import {
   headerKey,
   displayName,
+  fieldSourceId,
   type FieldGroup,
   type FieldGroupSource,
 } from "./utils";
@@ -40,6 +41,7 @@ export function createMappingActions(
     const byKey = new Map<
       string,
       {
+        id: string;
         key: string;
         tables: FieldGroupSource[];
         targets: Map<string, string>;
@@ -49,11 +51,13 @@ export function createMappingActions(
     >();
     for (const [index, table] of sources.value.entries()) {
       if (!table.enabled) continue;
-      for (const mapping of table.mappings) {
-        const key = headerKey(mapping.source_name);
+      for (const [mappingIndex, mapping] of table.mappings.entries()) {
+        // 同名来源只有在目标也相同时才属于一组，拆出后所有批量操作都按组隔离。
+        const key = JSON.stringify([headerKey(mapping.source_name), headerKey(mapping.target_name)]);
         let group = byKey.get(key);
         if (!group) {
           group = {
+            id: key,
             key: mapping.source_name.trim(),
             tables: [],
             targets: new Map(),
@@ -62,7 +66,14 @@ export function createMappingActions(
           };
           byKey.set(key, group);
         }
-        group.tables.push({ index, name: displayName(table) });
+        group.tables.push({
+          id: fieldSourceId(table, mapping, mappingIndex),
+          index,
+          name: displayName(table),
+          sourceIndex: mapping.source_index,
+          sourceName: mapping.source_name,
+          target: mapping.target_name,
+        });
         const target = mapping.target_name.trim();
         group.targets.set(headerKey(target), target);
         group.enables.add(mapping.enabled);
@@ -79,7 +90,6 @@ export function createMappingActions(
       targets: Map<string, string>;
     }) =>
       Math.min(
-        outputPosition(group.key),
         ...[...group.targets.values()].map((target) => outputPosition(target)),
       );
     return [...byKey.values()]
@@ -92,8 +102,9 @@ export function createMappingActions(
         );
       })
       .map((g) => ({
+        id: g.id,
         key: g.key,
-        count: g.tables.length,
+        count: new Set(g.tables.map((source) => source.index)).size,
         tables: g.tables,
         uniformTarget: g.targets.size === 1 ? [...g.targets.values()][0] : null,
         uniformEnabled: g.enables.size === 1 ? [...g.enables][0] : null,
@@ -121,32 +132,39 @@ export function createMappingActions(
     Object.assign(options.value, patch);
     void refreshPlan();
   }
-  function replaceOutputOrderName(previous: string, next: string) {
-    const previousKey = headerKey(previous);
-    if (!previousKey || options.value.output_order.length === 0) return;
-    const nextValue = next.trim();
-    const seen = new Set<string>();
-    let changed = false;
-    const updated: string[] = [];
-    for (const name of options.value.output_order) {
-      let value = name;
-      if (headerKey(name) === previousKey) {
-        value = nextValue;
-        changed = true;
-      }
-      const key = headerKey(value);
-      if (!key) {
-        changed = true;
-        continue;
-      }
-      if (seen.has(key)) {
-        changed = true;
-        continue;
-      }
-      seen.add(key);
-      updated.push(value);
+  function updateOutputOrder(changes: { previous: string; next: string }[]) {
+    if (options.value.output_order.length === 0) return;
+    const renamed = new Map<string, Set<string>>();
+    for (const { previous, next } of changes) {
+      const key = headerKey(previous);
+      if (key === headerKey(next)) continue;
+      const targets = renamed.get(key) ?? new Set<string>();
+      targets.add(next.trim());
+      renamed.set(key, targets);
     }
-    if (changed) options.value.output_order = updated;
+    // 部分来源改名时仍须保留旧输出列；已有的新目标保持原来的位置。
+    const activeTargets = new Set(sources.value.filter((table) => table.enabled)
+      .flatMap((table) => table.mappings.filter((mapping) => mapping.enabled)
+        .map((mapping) => headerKey(mapping.target_name))));
+    const originalKeys = new Set(options.value.output_order.map(headerKey));
+    const seen = new Set<string>();
+    const updated: string[] = [];
+    function append(value: string) {
+      const key = headerKey(value);
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        updated.push(value);
+      }
+    }
+    for (const name of options.value.output_order) {
+      const key = headerKey(name);
+      const targets = renamed.get(key);
+      if (!targets || activeTargets.has(key)) append(name);
+      for (const target of targets ?? []) {
+        if (!originalKeys.has(headerKey(target))) append(target);
+      }
+    }
+    options.value.output_order = updated;
   }
   function moveOutputColumn(index: number, direction: number) {
     const headers = [...planHeaders.value];
@@ -162,52 +180,52 @@ export function createMappingActions(
     );
     if (index >= 0) moveOutputColumn(index, direction);
   }
-  function forEachFieldMapping(
-    key: string,
-    fn: (mapping: ColumnMapping) => void,
-  ) {
-    const wantedKey = headerKey(key);
+  function sourceMappings(ids: string[]): ColumnMapping[] {
+    const wanted = new Set(ids);
+    const result: ColumnMapping[] = [];
     for (const table of sources.value) {
       if (!table.enabled) continue;
-      for (const mapping of table.mappings) {
-        if (headerKey(mapping.source_name) === wantedKey) fn(mapping);
+      for (const [mappingIndex, mapping] of table.mappings.entries()) {
+        if (wanted.has(fieldSourceId(table, mapping, mappingIndex))) result.push(mapping);
       }
     }
+    return result;
   }
-  function setFieldTarget(key: string, target: string) {
-    if (!target.trim()) return;
-    const previousTargets = new Set<string>();
-    forEachFieldMapping(key, (mapping) =>
-      previousTargets.add(mapping.target_name),
-    );
-    for (const previous of previousTargets)
-      replaceOutputOrderName(previous, target);
-    forEachFieldMapping(key, (mapping) => {
-      mapping.target_name = target.trim();
-    });
+  function groupMappings(id: string) {
+    const group = fieldGroups.value.find((group) => group.id === id);
+    return sourceMappings(group?.tables.map((source) => source.id) ?? []);
+  }
+  function setSourceFieldTargets(ids: string[], target: string) {
+    target = target.trim();
+    if (!target) return;
+    const mappings = sourceMappings(ids);
+    if (!mappings.length) return;
+    const changes = mappings.map((mapping) => ({ previous: mapping.target_name, next: target }));
+    for (const mapping of mappings) mapping.target_name = target;
+    updateOutputOrder(changes);
     void refreshPlan();
   }
-  function setFieldEnabled(key: string, enabled: boolean) {
-    forEachFieldMapping(key, (mapping) => {
-      mapping.enabled = enabled;
-    });
+  function setFieldTarget(id: string, target: string) {
+    const group = fieldGroups.value.find((group) => group.id === id);
+    if (group) setSourceFieldTargets(group.tables.map((source) => source.id), target);
+  }
+  function setFieldEnabled(id: string, enabled: boolean) {
+    for (const mapping of groupMappings(id)) mapping.enabled = enabled;
     void refreshPlan();
   }
-  function setFieldTransform(key: string, transform: TransformOp) {
-    forEachFieldMapping(key, (mapping) => {
-      mapping.transform = transform;
-    });
+  function setFieldTransform(id: string, transform: TransformOp) {
+    for (const mapping of groupMappings(id)) mapping.transform = transform;
     void refreshPlan();
   }
-  function resetField(key: string) {
-    forEachFieldMapping(key, (mapping) =>
-      replaceOutputOrderName(mapping.target_name, mapping.source_name),
-    );
-    forEachFieldMapping(key, (mapping) => {
+  function resetField(id: string) {
+    const mappings = groupMappings(id);
+    const changes = mappings.map((mapping) => ({ previous: mapping.target_name, next: mapping.source_name }));
+    for (const mapping of mappings) {
       mapping.target_name = mapping.source_name;
       mapping.enabled = true;
       mapping.transform = "None";
-    });
+    }
+    updateOutputOrder(changes);
     void refreshPlan();
   }
   return {
@@ -215,10 +233,9 @@ export function createMappingActions(
     refreshPlan,
     setMode,
     setAdvanced,
-    replaceOutputOrderName,
     moveOutputColumn,
     moveOutputColumnByName,
-    forEachFieldMapping,
+    setSourceFieldTargets,
     setFieldTarget,
     setFieldEnabled,
     setFieldTransform,

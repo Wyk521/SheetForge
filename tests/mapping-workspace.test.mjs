@@ -119,7 +119,17 @@ test("导航和输出预览不再使用第一二三步文案", async () => {
 test("目标字段在失焦或回车时才提交，不逐键改写映射", async () => {
   const fieldBatch = await read("src/components/FieldBatchView.vue");
 
-  assert.match(fieldBatch, /@change="\(v: string\) => commitTarget\(row\.key, v\)"/);
+  assert.match(fieldBatch, /@change="\(v: string\) => commitTarget\(row\.id, v\)"/);
   assert.doesNotMatch(fieldBatch, /@update:model-value="\(v: string\) => store\.setFieldTarget/);
 });
 
+
+test("展开字段映射不自动读取源表内容", async () => {
+  const [fieldBatch, store] = await Promise.all([
+    read("src/components/FieldBatchView.vue"),
+    read("src/stores/merge.ts"),
+  ]);
+  assert.doesNotMatch(fieldBatch, /loadFieldSamples|preview_source|内容样例|@expand-change/);
+  assert.doesNotMatch(store, /createFieldSamples|fieldSamples/);
+  assert.match(fieldBatch, /@click\.stop="store\.showSourcePreview\(source\.index\)"/);
+});

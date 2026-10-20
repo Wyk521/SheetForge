@@ -57,6 +57,12 @@ function table(path = "C:\\数据\\一.xlsx", sheet_name = "Sheet1"): SourceTabl
     })),
   };
 }
+function groupId(store: ReturnType<typeof useMergeStore>, name: string, target?: string) {
+  const group = store.fieldGroups.find((group) => headerKey(group.key) === headerKey(name)
+    && (target === undefined || headerKey(group.uniformTarget ?? "") === headerKey(target)));
+  expect(group).toBeDefined();
+  return group!.id;
+}
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -121,6 +127,84 @@ beforeEach(() => {
 });
 
 describe("字段规则和来源", () => {
+  it("同名字段按来源拆开后，整组改名、启用、清洗和恢复只作用于当前组", () => {
+    const store = useMergeStore();
+    store.sources = [table("一.xlsx"), table("二.xlsx"), table("三.xlsx"),
+      { ...table("停用.xlsx"), enabled: false }];
+    const original = store.fieldGroups.find((group) => group.key === "姓名")!;
+    store.setSourceFieldTargets([original.tables[1].id], "收货人");
+    const groups = store.fieldGroups.filter((group) => group.key === "姓名");
+    expect(groups.map((group) => [group.uniformTarget, group.count])).toEqual(
+      expect.arrayContaining([["姓名", 2], ["收货人", 1]]),
+    );
+    store.setFieldTarget(groupId(store, "姓名", "姓名"), "客户");
+    store.setFieldTransform(groupId(store, "姓名", "客户"), "Trim");
+    store.setFieldEnabled(groupId(store, "姓名", "客户"), false);
+    expect(store.sources[1].mappings[0]).toMatchObject({
+      target_name: "收货人", transform: "None", enabled: true,
+    });
+    store.resetField(groupId(store, "姓名", "收货人"));
+    expect(store.sources.map((source) => source.mappings[0].target_name)).toEqual([
+      "客户", "姓名", "客户", "姓名",
+    ]);
+    expect(store.sources[0].mappings[0]).toMatchObject({ transform: "Trim", enabled: false });
+    expect(store.sources[3].mappings[0]).toMatchObject({ transform: "None", enabled: true });
+  });
+  it("拆分支持多选，重新使用同一个目标名后归为同组", () => {
+    const store = useMergeStore();
+    store.sources = [table("一.xlsx"), table("二.xlsx"), table("三.xlsx")];
+    const group = store.fieldGroups.find((group) => group.key === "姓名")!;
+    const ids = group.tables.slice(1).map((source) => source.id);
+    store.setSourceFieldTargets(ids, " 收货人 ");
+    expect(store.fieldGroups.find((group) => group.uniformTarget === "收货人")?.count).toBe(2);
+    store.setSourceFieldTargets(ids, "姓名");
+    expect(store.fieldGroups.filter((group) => group.key === "姓名")).toHaveLength(1);
+    expect(store.fieldGroups.find((group) => group.key === "姓名")?.count).toBe(3);
+    store.setSourceFieldTargets(ids, "  ");
+    expect(store.sources.every((source) => source.mappings[0].target_name === "姓名")).toBe(true);
+  });
+  it("按来源修改不依赖列表下标，追加排序或移除来源后不会改错表", () => {
+    const store = useMergeStore();
+    store.sources = [table("B.xlsx"), table("C.xlsx")];
+    const source = store.fieldGroups.find((group) => group.key === "姓名")!.tables[1];
+    store.sources = [table("A.xlsx"), ...store.sources];
+    store.setSourceFieldTargets([source.id], "客户");
+    expect(store.sources.map((table) => table.mappings[0].target_name)).toEqual(["姓名", "姓名", "客户"]);
+    store.sources.pop();
+    store.setSourceFieldTargets([source.id], "不应写入");
+    expect(store.sources.every((table) => table.mappings[0].target_name === "姓名")).toBe(true);
+  });
+  it("重复列名用列位置区分，同表计数不会重复", () => {
+    const store = useMergeStore();
+    const source = table();
+    source.headers[1] = "姓名";
+    source.mappings[1] = { ...source.mappings[0], source_index: 1 };
+    store.sources = [source];
+    const group = store.fieldGroups[0];
+    expect(group.count).toBe(1);
+    expect(group.tables[0].id).not.toBe(group.tables[1].id);
+    store.setSourceFieldTargets([group.tables[1].id], "收货人");
+    expect(store.sources[0].mappings.map((mapping) => mapping.target_name)).toEqual(["姓名", "收货人"]);
+  });
+  it("部分来源改名保留原输出列，重新归并不重复或移动已有目标列", () => {
+    const store = useMergeStore();
+    store.sources = [table("一.xlsx"), table("二.xlsx")];
+    store.options.output_order = ["姓名", "金额", "来源文件"];
+    const source = store.fieldGroups.find((group) => group.key === "姓名")!.tables[1];
+    store.setSourceFieldTargets([source.id], "客户");
+    expect(store.options.output_order).toEqual(["姓名", "客户", "金额", "来源文件"]);
+    store.setFieldTarget(groupId(store, "姓名", "姓名"), "客户");
+    expect(store.options.output_order).toEqual(["客户", "金额", "来源文件"]);
+  });
+  it("不同源字段共用目标列时，改动其中一组仍保留另一组的输出位置", () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    store.sources[0].mappings[1].target_name = "姓名";
+    store.options.output_order = ["姓名", "已有目标", "来源文件"];
+    store.setFieldTarget(groupId(store, "姓名"), "已有目标");
+    expect(store.options.output_order).toEqual(["姓名", "已有目标", "来源文件"]);
+    expect(store.sources[0].mappings[1].target_name).toBe("姓名");
+  });
   it("移除确认期间追加并排序来源后仍移除原来选中的 Sheet", async () => {
     const store = useMergeStore();
     await store.initEvents();
@@ -145,15 +229,15 @@ describe("字段规则和来源", () => {
     const store = useMergeStore();
     store.sources = [table(), { ...table("二.xlsx"), enabled: false }];
     store.options.output_order = ["姓名", "金额"];
-    store.setFieldTarget("姓名", " 客户 ");
-    store.setFieldTransform("姓名", "Trim");
+    store.setFieldTarget(groupId(store, "姓名"), " 客户 ");
+    store.setFieldTransform(groupId(store, "姓名"), "Trim");
     expect(store.sources[0].mappings[0]).toMatchObject({
       target_name: "客户",
       transform: "Trim",
     });
     expect(store.sources[1].mappings[0].target_name).toBe("姓名");
     expect(store.options.output_order).toEqual(["客户", "金额"]);
-    store.resetField("姓名");
+    store.resetField(groupId(store, "姓名"));
     expect(store.sources[0].mappings[0]).toMatchObject({
       target_name: "姓名",
       transform: "None",
@@ -189,9 +273,9 @@ describe("字段规则和来源", () => {
     store.moveOutputColumnByName("不存在", -1);
     store.moveOutputColumn(-1, 1);
     expect(store.options.output_order).toEqual(["金额", "来源文件", "姓名"]);
-    store.setFieldEnabled("姓名", false);
+    store.setFieldEnabled(groupId(store, "姓名"), false);
     expect(store.sources.map((source) => source.mappings[0].enabled)).toEqual([false, true]);
-    store.setFieldEnabled("姓名", true);
+    store.setFieldEnabled(groupId(store, "姓名"), true);
     expect(store.sources[0].mappings[0].enabled).toBe(true);
   });
   it("追加扫描去重并保留已有映射和顺序", async () => {
@@ -231,6 +315,73 @@ describe("字段规则和来源", () => {
 });
 
 describe("预览请求", () => {
+  it("重复打开同一源表直接显示缓存，字段映射变化不重读原始数据", async () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    const preview = { headers: ["姓名", "金额"], rows: [["张三", "100"]] };
+    native.invoke.mockResolvedValueOnce(preview);
+    await store.showSourcePreview(0);
+    store.closeSourcePreview();
+    store.setFieldTarget(groupId(store, "姓名"), "客户");
+    await store.showSourcePreview(0);
+    expect(called("preview_source")).toHaveLength(1);
+    expect(store.sourcePreview).toEqual(preview);
+    expect(store.sourcePreviewVisible).toBe(true);
+    expect(store.sourcePreviewLoading).toBe(false);
+  });
+  it("关闭后在同一读取结束前再次打开会共用请求", async () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    const result = deferred<PreviewTable>();
+    native.invoke.mockReturnValueOnce(result.promise);
+    const first = store.showSourcePreview(0);
+    store.closeSourcePreview();
+    const second = store.showSourcePreview(0);
+    expect(called("preview_source")).toHaveLength(1);
+    result.resolve({ headers: ["姓名"], rows: [["张三"]] });
+    await Promise.all([first, second]);
+    expect(store.sourcePreview?.rows).toEqual([["张三"]]);
+    expect(store.sourcePreviewVisible).toBe(true);
+  });
+  it("手动刷新会重新读取，旧请求不会覆盖刷新结果或缓存", async () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    const old = deferred<PreviewTable>();
+    const latest = { headers: ["姓名"], rows: [["新内容"]] };
+    native.invoke.mockReturnValueOnce(old.promise).mockResolvedValueOnce(latest);
+    const pending = store.showSourcePreview(0);
+    await store.refreshSourcePreview();
+    old.resolve({ headers: ["姓名"], rows: [["旧内容"]] });
+    await pending;
+    store.closeSourcePreview();
+    await store.showSourcePreview(0);
+    expect(called("preview_source")).toHaveLength(2);
+    expect(store.sourcePreview).toEqual(latest);
+  });
+  it("重新导入同一路径或改变表头后重新读取预览", async () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    native.invoke.mockResolvedValue({ headers: ["姓名"], rows: [["内容"]] });
+    await store.showSourcePreview(0);
+    store.closeSourcePreview();
+    store.sources = [table()];
+    await store.showSourcePreview(0);
+    store.sources[0].header_row = 2;
+    await store.showSourcePreview(0);
+    expect(called("preview_source")).toHaveLength(3);
+    expect(called("preview_source")[2][1].table.header_row).toBe(2);
+  });
+  it("预览读取失败后可以重新打开重试", async () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    native.invoke.mockRejectedValueOnce(new Error("文件不可用"));
+    await store.showSourcePreview(0);
+    expect(store.sourcePreviewVisible).toBe(false);
+    native.invoke.mockResolvedValueOnce({ headers: ["姓名"], rows: [["已恢复"]] });
+    await store.showSourcePreview(0);
+    expect(called("preview_source")).toHaveLength(2);
+    expect(store.sourcePreview?.rows).toEqual([["已恢复"]]);
+  });
   it("源表预览忽略较早返回的结果", async () => {
     const store = useMergeStore();
     store.sources = [table(), table("二.xlsx")];
@@ -551,6 +702,35 @@ describe("异步状态和事件生命周期", () => {
 });
 
 describe("数据库、方案和更新", () => {
+  it("拆分字段保存再打开仍保持独立，并保留清洗、启用和输出顺序", async () => {
+    const store = useMergeStore();
+    store.sources = [table("一.xlsx"), table("二.xlsx")];
+    store.options.output_order = ["姓名", "金额"];
+    const source = store.fieldGroups.find((group) => group.key === "姓名")!.tables[1];
+    store.setSourceFieldTargets([source.id], "收货人");
+    store.setFieldTransform(groupId(store, "姓名", "收货人"), "Trim");
+    store.setFieldEnabled(groupId(store, "姓名", "收货人"), false);
+    let saved: MergeScheme;
+    const original = native.invoke.getMockImplementation()!;
+    native.save.mockResolvedValueOnce("拆分方案.json");
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === "save_scheme") {
+        saved = JSON.parse(JSON.stringify({ format_version: 1, name: "拆分方案", tables: args.tables, options: args.options }));
+        return;
+      }
+      if (command === "open_scheme") return saved;
+      return original(command, args);
+    });
+    await store.saveScheme();
+    store.sources = [];
+    store.options = defaultOptions();
+    await store.openSchemeByPath("拆分方案.json");
+    expect(store.fieldGroups.filter((group) => group.key === "姓名")).toHaveLength(2);
+    expect(store.sources[1].mappings[0]).toMatchObject({ target_name: "收货人", transform: "Trim", enabled: false });
+    expect(store.options.output_order).toEqual(["姓名", "收货人", "金额"]);
+    store.setFieldTarget(groupId(store, "姓名", "姓名"), "客户");
+    expect(store.sources[1].mappings[0].target_name).toBe("收货人");
+  });
   it("方案保存再打开完整恢复来源、映射和所有规则", async () => {
     const store = useMergeStore();
     store.sources = [table(), {...table("停用.csv", "数据"), kind: {Csv: {delimiter: 9}}, enabled: false}];

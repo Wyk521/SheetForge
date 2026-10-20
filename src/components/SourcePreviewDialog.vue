@@ -27,6 +27,7 @@ const store = useMergeStore();
       暂无可预览内容
     </div>
     <template #footer>
+      <el-button :disabled="store.sourcePreviewLoading || store.busy" @click="store.refreshSourcePreview()">刷新</el-button>
       <el-button @click="store.closeSourcePreview()">关闭</el-button>
     </template>
   </el-dialog>

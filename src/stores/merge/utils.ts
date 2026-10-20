@@ -1,15 +1,23 @@
-import type { SourceTable, TransformOp } from "../../types";
+import type { ColumnMapping, SourceTable, TransformOp } from "../../types";
 export interface FieldGroupSource {
+  id: string;
   index: number;
   name: string;
+  sourceIndex: number;
+  sourceName: string;
+  target: string;
 }
 export interface FieldGroup {
+  id: string;
   key: string;
   count: number;
   tables: FieldGroupSource[];
   uniformTarget: string | null;
   uniformEnabled: boolean | null;
   uniformTransform: TransformOp | null;
+}
+export function fieldSourceId(table: SourceTable, mapping: ColumnMapping, mappingIndex: number): string {
+  return JSON.stringify([table.path, table.sheet_name, mapping.source_index, mapping.source_name, mappingIndex]);
 }
 export function headerKey(value: string): string {
   return value

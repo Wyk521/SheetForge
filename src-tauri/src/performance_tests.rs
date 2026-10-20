@@ -25,7 +25,7 @@ fn generate_fixtures() {
     csv.flush().unwrap();
     let mut workbook = rust_xlsxwriter::Workbook::new();
     for sheet in 0..10 {
-        let worksheet = workbook.add_worksheet_with_constant_memory();
+        let worksheet = workbook.add_worksheet_with_constant_memory().unwrap();
         worksheet.set_name(format!("Sheet{sheet}")).unwrap();
         for (column, name) in [
             "编号", "客户", "城市", "金额", "备注", "部门", "日期", "状态",

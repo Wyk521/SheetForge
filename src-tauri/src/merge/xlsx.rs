@@ -66,7 +66,7 @@ impl XlsxSink {
     }
     fn add_sheet(&mut self) -> Result<()> {
         let index = self.workbook.worksheets().len();
-        let worksheet = self.workbook.add_worksheet_with_constant_memory();
+        let worksheet = self.workbook.add_worksheet_with_constant_memory()?;
         worksheet.set_name(format!("合并结果_{:03}", index + 1))?;
         worksheet.set_freeze_panes(1, 0)?;
         for (column, header) in self.plan.headers.iter().enumerate() {
