@@ -6,16 +6,56 @@ use super::{
     },
     markup::{scan_markup_auto_headers, scan_markup_sheet},
 };
+use crate::file_cache::{Cache, FileVersion};
 use crate::model::SourceTable;
 use anyhow::{bail, Context, Result};
 use calamine::{open_workbook, open_workbook_auto, Data, Ods, Reader, Sheets, Xls, Xlsb, Xlsx};
-use std::path::Path;
-use std::{fs::File, io::BufReader, thread, time::Duration};
-pub(crate) fn open_xlsx_workbook(path: &Path) -> Result<Xlsx<BufReader<File>>> {
+use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::BufReader,
+    sync::{Mutex, OnceLock},
+    thread,
+    time::Duration,
+};
+pub(crate) struct XlsxWorkbook {
+    inner: Xlsx<BufReader<File>>,
+    path: PathBuf,
+    version: Option<FileVersion>,
+}
+impl std::ops::Deref for XlsxWorkbook {
+    type Target = Xlsx<BufReader<File>>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+impl std::ops::DerefMut for XlsxWorkbook {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+impl XlsxWorkbook {
+    fn unchanged(&self) -> Result<()> {
+        if self.version != FileVersion::read(&self.path) {
+            bail!("读取期间源文件已修改，请重新读取");
+        }
+        Ok(())
+    }
+}
+pub(crate) fn open_xlsx_workbook(path: &Path) -> Result<XlsxWorkbook> {
     let mut last_error = None;
     for attempt in 0..3 {
+        let version = FileVersion::read(path);
         match open_workbook::<Xlsx<_>, _>(path) {
-            Ok(workbook) => return Ok(workbook),
+            Ok(inner) => {
+                let workbook = XlsxWorkbook {
+                    inner,
+                    path: path.to_path_buf(),
+                    version,
+                };
+                workbook.unchanged()?;
+                return Ok(workbook);
+            }
             Err(error) => {
                 let incomplete = error
                     .to_string()
@@ -35,7 +75,7 @@ pub(crate) fn open_xlsx_workbook(path: &Path) -> Result<Xlsx<BufReader<File>>> {
 
 pub(crate) fn open_detected_workbook(path: &Path) -> Result<Sheets<BufReader<File>>> {
     match workbook_format(path)? {
-        WorkbookFormat::Xlsx => Ok(Sheets::Xlsx(open_xlsx_workbook(path)?)),
+        WorkbookFormat::Xlsx => Ok(Sheets::Xlsx(open_xlsx_workbook(path)?.inner)),
         WorkbookFormat::Xls => open_workbook::<Xls<_>, _>(path)
             .map(Sheets::Xls)
             .context("无法打开工作簿"),
@@ -58,13 +98,110 @@ pub(crate) struct XlsxStreamBounds {
     pub(crate) actual_columns: Option<(u32, u32)>,
 }
 
+type OriginKey = (PathBuf, String, FileVersion);
+static XLSX_COLUMN_ORIGINS: OnceLock<Mutex<Cache<OriginKey, u32>>> = OnceLock::new();
+pub(super) fn clear_origin(path: &Path) {
+    if let Some(cache) = XLSX_COLUMN_ORIGINS.get() {
+        if let Ok(mut cache) = cache.lock() {
+            cache.retain(|(file, _, _)| file != path);
+        }
+    }
+}
+fn origin_key(workbook: &XlsxWorkbook, sheet: &str) -> Option<OriginKey> {
+    Some((
+        workbook.path.clone(),
+        sheet.to_owned(),
+        workbook.version.clone()?,
+    ))
+}
+fn xlsx_origin(workbook: &XlsxWorkbook, sheet: &str) -> Option<u32> {
+    let key = origin_key(workbook, sheet)?;
+    XLSX_COLUMN_ORIGINS.get()?.lock().ok()?.get(&key)
+}
+pub(crate) fn for_each_xlsx_source_row<F>(
+    workbook: &mut XlsxWorkbook,
+    sheet: &str,
+    offset: usize,
+    limit: Option<usize>,
+    callback: F,
+) -> Result<XlsxStreamBounds>
+where
+    F: FnMut(Vec<Data>) -> Result<()>,
+{
+    workbook.unchanged()?;
+    let origin = xlsx_origin(workbook, sheet);
+    let bounds = read_xlsx_rows(
+        &mut workbook.inner,
+        sheet,
+        offset,
+        limit,
+        origin,
+        true,
+        callback,
+    )?;
+    workbook.unchanged()?;
+    if let (Some(key), Some((column, _))) = (origin_key(workbook, sheet), bounds.actual_columns) {
+        if let Ok(mut cache) = XLSX_COLUMN_ORIGINS
+            .get_or_init(|| Mutex::new(Cache::new(1024, 1024 * 1024)))
+            .lock()
+        {
+            cache.insert(key, column, 512);
+        }
+    }
+    Ok(bounds)
+}
+
 /// Read an XLSX worksheet one row at a time without materializing the full Range.
 /// `row_offset` is relative to the first used row, matching `Range::rows().skip(...)`.
+#[cfg(test)]
 pub(crate) fn for_each_xlsx_row<F>(
     workbook: &mut Xlsx<BufReader<File>>,
     sheet_name: &str,
     row_offset: usize,
     max_rows: Option<usize>,
+    callback: F,
+) -> Result<XlsxStreamBounds>
+where
+    F: FnMut(Vec<Data>) -> Result<()>,
+{
+    read_xlsx_rows(
+        workbook, sheet_name, row_offset, max_rows, None, true, callback,
+    )
+}
+
+/// Preview only: reuse the scanned column origin and stop after the requested rows.
+pub(crate) fn for_each_xlsx_preview_row<F>(
+    workbook: &mut XlsxWorkbook,
+    _path: &Path,
+    sheet_name: &str,
+    row_offset: usize,
+    max_rows: usize,
+    callback: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Data>) -> Result<()>,
+{
+    workbook.unchanged()?;
+    let origin = xlsx_origin(workbook, sheet_name);
+    read_xlsx_rows(
+        &mut workbook.inner,
+        sheet_name,
+        row_offset,
+        Some(max_rows),
+        origin,
+        false,
+        callback,
+    )?;
+    workbook.unchanged()
+}
+
+fn read_xlsx_rows<F>(
+    workbook: &mut Xlsx<BufReader<File>>,
+    sheet_name: &str,
+    row_offset: usize,
+    max_rows: Option<usize>,
+    mut base_column: Option<u32>,
+    full_bounds: bool,
     mut callback: F,
 ) -> Result<XlsxStreamBounds>
 where
@@ -72,21 +209,21 @@ where
 {
     // The first non-empty cell can be a centered title. Find the leftmost actual
     // column before emitting rows so later header cells cannot overwrite it.
-    let mut bounds_reader = workbook
-        .worksheet_cells_reader(sheet_name)
-        .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
-    let mut base_column = None;
-    while let Some(cell) = bounds_reader.next_cell()? {
-        let value = Data::from(cell.get_value().clone());
-        if !is_effectively_empty(&value) {
-            let column = cell.get_position().1;
-            base_column = Some(base_column.map_or(column, |base: u32| base.min(column)));
-            if base_column == Some(0) {
-                break;
+    if base_column.is_none() {
+        let mut bounds_reader = workbook
+            .worksheet_cells_reader(sheet_name)
+            .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
+        while let Some(cell) = bounds_reader.next_cell()? {
+            let value = Data::from(cell.get_value().clone());
+            if !is_effectively_empty(&value) {
+                let column = cell.get_position().1;
+                base_column = Some(base_column.map_or(column, |base| base.min(column)));
+                if base_column == Some(0) {
+                    break;
+                }
             }
         }
     }
-    drop(bounds_reader);
     let mut reader = workbook
         .worksheet_cells_reader(sheet_name)
         .with_context(|| format!("无法读取工作表 {sheet_name}"))?;
@@ -108,7 +245,7 @@ where
     let mut emitted = 0_usize;
     let mut collecting = true;
 
-    while let Some(cell) = reader.next_cell()? {
+    'cells: while let Some(cell) = reader.next_cell()? {
         let (row, column) = cell.get_position();
         let value = Data::from(cell.get_value().clone());
         // Excel 经常会把“设置过格式但没有内容”的单元格写进 XML，
@@ -138,8 +275,10 @@ where
             if emitted >= max_rows {
                 collecting = false;
                 current.clear();
-                // 预览行数达到上限后仍需继续读取 XML，才能识别真实的最后
-                // 一个非空单元格；但后续单元格不再构造 Vec 或调用回调。
+                if !full_bounds {
+                    break 'cells;
+                }
+                // 导入扫描仍需读到最后，计算真实范围；预览到达上限即结束。
                 break;
             }
             next_row = next_row.saturating_add(1);
@@ -226,12 +365,12 @@ pub(super) fn scan_xlsx_auto_headers(path: &Path) -> Result<Vec<SourceTable>> {
 
 pub(super) fn scan_xlsx_reader_auto_headers(
     path: &Path,
-    mut workbook: Xlsx<BufReader<File>>,
+    mut workbook: XlsxWorkbook,
 ) -> Result<Vec<SourceTable>> {
     let mut result = Vec::new();
     for sheet_name in workbook.sheet_names().to_vec() {
         let mut sample_rows = Vec::new();
-        let bounds = for_each_xlsx_row(
+        let bounds = for_each_xlsx_source_row(
             &mut workbook,
             &sheet_name,
             0,
@@ -365,7 +504,7 @@ pub(super) fn scan_workbook_sheet_fallback(
 }
 
 pub(super) fn scan_xlsx_sheet(
-    workbook: &mut Xlsx<BufReader<File>>,
+    workbook: &mut XlsxWorkbook,
     path: &Path,
     sheet_name: &str,
     header_row: usize,
@@ -375,7 +514,7 @@ pub(super) fn scan_xlsx_sheet(
     let header_row = header_row.max(1);
     let header_rows = header_rows.clamp(1, 3);
     let mut parts = Vec::new();
-    let bounds = for_each_xlsx_row(
+    let bounds = for_each_xlsx_source_row(
         workbook,
         sheet_name,
         header_row - 1,
@@ -472,4 +611,48 @@ pub(super) fn range_content_bounds(range: &calamine::Range<Data>) -> (usize, usi
         last_row.map_or(0, |row| row + 1),
         last_column.map_or(0, |column| column + 1),
     )
+}
+
+/// One active workbook bounds shared-string memory while reloading adjacent Sheets.
+#[derive(Default)]
+pub(super) struct SheetReader {
+    workbook: Option<(PathBuf, XlsxWorkbook)>,
+}
+impl SheetReader {
+    pub(super) fn scan(
+        &mut self,
+        source: &SourceTable,
+        header_row: usize,
+        header_rows: usize,
+    ) -> Result<SourceTable> {
+        if is_xlsx_path(&source.path) {
+            if !self
+                .workbook
+                .as_ref()
+                .is_some_and(|(path, _)| path == &source.path)
+            {
+                self.workbook = None;
+                if let Ok(workbook) = open_xlsx_workbook(&source.path) {
+                    self.workbook = Some((source.path.clone(), workbook));
+                }
+            }
+            if let Some((_, workbook)) = &mut self.workbook {
+                return scan_xlsx_sheet(
+                    workbook,
+                    &source.path,
+                    &source.sheet_name,
+                    header_row,
+                    header_rows,
+                    source.suggested_header_row,
+                );
+            }
+        }
+        scan_workbook_sheet(
+            &source.path,
+            &source.sheet_name,
+            header_row,
+            header_rows,
+            source.suggested_header_row,
+        )
+    }
 }

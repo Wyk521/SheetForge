@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { headerKey, useMergeStore, type FieldGroup, type FieldGroupSource } from "../stores/merge";
 import type { TransformOp } from "../types";
@@ -101,6 +101,11 @@ const filteredGroups = computed(() => {
     return true;
   });
 });
+const page = ref(1);
+const pageSize = 100;
+const pagedGroups = computed(() => filteredGroups.value.slice((page.value - 1) * pageSize, page.value * pageSize));
+watch(() => [store.mappingSearch, store.onlyMultiField], () => { page.value = 1; });
+watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize))); });
 </script>
 
 <template>
@@ -110,7 +115,7 @@ const filteredGroups = computed(() => {
       <el-checkbox v-model="store.onlyMultiField">只看多表字段</el-checkbox>
     </div>
     <div v-if="filteredGroups.length > 0" class="sf-field-table-wrap">
-      <el-table class="sf-field-table" :data="filteredGroups" row-key="id" size="small" border>
+      <el-table class="sf-field-table" :data="pagedGroups" row-key="id" size="small" border>
       <el-table-column type="expand">
         <template #default="{ row }">
           <div class="sf-source-preview-list">
@@ -245,6 +250,8 @@ const filteredGroups = computed(() => {
         </template>
       </el-table-column>
       </el-table>
+      <el-pagination v-model:current-page="page" :page-size="pageSize" :total="filteredGroups.length"
+        layout="total, prev, pager, next" hide-on-single-page small class="sf-field-pagination" />
     </div>
     <div v-else class="sf-field-batch-empty">
       {{ store.fieldGroups.length === 0 ? "暂无启用表字段" : "没有匹配的字段" }}
@@ -276,6 +283,8 @@ const filteredGroups = computed(() => {
 .sf-field-batch-search {
   flex: 0 0 12.5rem;
 }
+
+.sf-field-pagination { margin-top: var(--space-sm); justify-content: flex-end; }
 
 .sf-field-table-wrap {
   width: 100%;

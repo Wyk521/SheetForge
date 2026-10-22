@@ -6,13 +6,12 @@ Node.js 22、稳定版 Rust；在项目根目录运行：
 
 ```sh
 npm ci
-npm test
-npm run build
-cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml --locked
-cargo audit --file src-tauri/Cargo.lock
+npm run validate -- --postgres --output /tmp/sheetforge-validation
+# 追加新旧版本性能对照及千万行压力验证：
+npm run validate -- --postgres --performance --large --output /tmp/sheetforge-full-validation
 ```
+
+一个入口依次执行格式、Clippy、Rust、审计、前端测试与构建；失败会打印日志尾部，完整日志与 JSON 汇总保留在输出目录。PostgreSQL 使用自动创建并清理的专用临时容器。性能矩阵、输入规模和浏览器批量页面见 [批量验证说明](../scripts/performance/README.md)。
 
 `npm test` 先类型检查源码与测试，再执行 `node:test` 界面结构检查和 Vitest 状态/异步行为测试。测试不要求打开桌面窗口。真实文件用例扫描、合并并读回 XLSX，逐格验证输出值及类型；预览按来源抽样，不能把样本行数等同于最终合并行数。
 

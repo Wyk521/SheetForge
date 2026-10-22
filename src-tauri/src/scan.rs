@@ -30,11 +30,20 @@ pub use tasks::{
     ScanFailedDto, ScanFinishedDto, ScanProgressDto, TableReloadFailedDto, TableReloadedDto,
     TablesReloadedDto,
 };
+#[cfg(test)]
+pub(crate) use workbook::for_each_xlsx_row;
 #[allow(unused_imports)]
 pub(crate) use workbook::XlsxStreamBounds;
-pub(crate) use workbook::{for_each_xlsx_row, open_detected_workbook, open_xlsx_workbook};
+pub(crate) use workbook::XlsxWorkbook;
+pub(crate) use workbook::{
+    for_each_xlsx_preview_row, for_each_xlsx_source_row, open_detected_workbook, open_xlsx_workbook,
+};
 use workbook::{scan_workbook_auto_headers, scan_workbook_sheet, scan_xlsx_auto_headers};
 
+pub(crate) fn invalidate_cached_source(path: &Path) {
+    csv::clear_encoding(path);
+    workbook::clear_origin(path);
+}
 pub fn scan_file(path: &Path) -> Result<(Vec<SourceTable>, Vec<String>)> {
     match path
         .extension()

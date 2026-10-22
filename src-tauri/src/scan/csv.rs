@@ -1,10 +1,21 @@
 use super::header::{combine_header_rows, recommend_header, AUTO_HEADER_ROWS};
+use crate::file_cache::{Cache, FileVersion};
 use crate::model::make_default_mappings;
 use crate::model::{SourceKind, SourceTable};
 use anyhow::{Context, Result};
 use csv::{ByteRecord, ReaderBuilder};
 use encoding_rs::{Encoding, GBK, UTF_8};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+static ENCODINGS: OnceLock<Mutex<Cache<(PathBuf, FileVersion), &'static Encoding>>> =
+    OnceLock::new();
+pub(super) fn clear_encoding(path: &Path) {
+    if let Some(cache) = ENCODINGS.get() {
+        if let Ok(mut cache) = cache.lock() {
+            cache.retain(|(file, _)| file != path);
+        }
+    }
+}
 use std::{
     fs::File,
     io::{BufReader, Read},
@@ -12,6 +23,26 @@ use std::{
 const SAMPLE_BYTES: usize = 256 * 1024;
 const EXACT_COUNT_LIMIT: u64 = 64 * 1024 * 1024;
 pub(crate) fn csv_encoding(path: &Path) -> Result<&'static Encoding> {
+    let version = FileVersion::read(path);
+    let key = version.clone().map(|version| (path.to_path_buf(), version));
+    let cache = ENCODINGS.get_or_init(|| Mutex::new(Cache::new(256, 256 * 1024)));
+    if let Some(key) = &key {
+        if let Some(encoding) = cache.lock().ok().and_then(|mut cache| cache.get(key)) {
+            return Ok(encoding);
+        }
+    }
+    let encoding = detect_encoding(path)?;
+    if version != FileVersion::read(path) {
+        anyhow::bail!("读取期间源文件已修改，请重新读取");
+    }
+    if let Some(key) = key {
+        if let Ok(mut cache) = cache.lock() {
+            cache.insert(key, encoding, 512);
+        }
+    }
+    Ok(encoding)
+}
+fn detect_encoding(path: &Path) -> Result<&'static Encoding> {
     let mut file = File::open(path)?;
     let mut decoder = UTF_8.new_decoder_without_bom_handling();
     let mut input = [0; 8192];

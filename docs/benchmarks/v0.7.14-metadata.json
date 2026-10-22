@@ -1,0 +1,245 @@
+{
+  "metadata": {
+    "baseline": "ca4f414203defc19841174a13ca90645f3fc8e9d",
+    "current_source": "ba4c3d103b7f8f5344a9b7f472a8638af5297e1d432b6b8b4ece8a703e339848",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "profile": "release opt-level=z lto=fat codegen-units=1",
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "cases": [
+      {
+        "name": "csv_1k_16",
+        "kind": "csv",
+        "rows": 1000,
+        "cols": 16
+      },
+      {
+        "name": "csv_10k_64",
+        "kind": "csv",
+        "rows": 10000,
+        "cols": 64
+      },
+      {
+        "name": "csv_1m_16",
+        "kind": "csv",
+        "rows": 1000000,
+        "cols": 16
+      },
+      {
+        "name": "csv_gbk_100k_64",
+        "kind": "csv",
+        "rows": 100000,
+        "cols": 64,
+        "gbk": true
+      },
+      {
+        "name": "xlsx_inline_1m_16",
+        "kind": "xlsx",
+        "rows": 1000000,
+        "cols": 16
+      },
+      {
+        "name": "xlsx_shared_100k_64",
+        "kind": "xlsx",
+        "rows": 100000,
+        "cols": 64,
+        "shared": true
+      },
+      {
+        "name": "xlsx_inline_10k_512",
+        "kind": "xlsx",
+        "rows": 10000,
+        "cols": 512
+      },
+      {
+        "name": "xlsx_shared_10k_256",
+        "kind": "xlsx",
+        "rows": 10000,
+        "cols": 256,
+        "shared": true
+      },
+      {
+        "name": "xlsx_offset_8sheets_10k_64",
+        "kind": "xlsx",
+        "rows": 10000,
+        "cols": 64,
+        "sheets": 8,
+        "offset": 3,
+        "title": true
+      },
+      {
+        "name": "csv_100files_1k_64",
+        "kind": "csv",
+        "rows": 1000,
+        "cols": 64,
+        "files": 100,
+        "heterogeneous": true
+      },
+      {
+        "name": "csv_10m_8",
+        "kind": "csv",
+        "rows": 10000000,
+        "cols": 8
+      },
+      {
+        "name": "csv_numeric_edges_100k_64",
+        "kind": "csv",
+        "rows": 100000,
+        "cols": 64
+      },
+      {
+        "name": "xlsx_numeric_edges_100k_64",
+        "kind": "xlsx",
+        "rows": 100000,
+        "cols": 64,
+        "shared": true
+      }
+    ]
+  },
+  "fixtures": {
+    "csv_1k_16": {
+      "input000.csv": "e10a444b5cde85d5b811b589df7aa98ffad44870140a61103c8a2971ec1026f6"
+    },
+    "csv_10k_64": {
+      "input000.csv": "6951664b0e9a56b56450391dbeafeb2f06f3e794394782c85ecb34b725a81132"
+    },
+    "csv_1m_16": {
+      "input000.csv": "66f52160bacbd627039e4c0cb18245bb47629500ef6dabd6e8e521c82e9cbf51"
+    },
+    "csv_gbk_100k_64": {
+      "input000.csv": "bd1147f250c81062a9faab30fd67ac9a3c7cdf920d3c7df129969b53f3567759"
+    },
+    "xlsx_inline_1m_16": {
+      "input000.xlsx": "be50c8cf1f2d54f1853c6feba0c453517f531cae06a00ef3b18f6ad419e5fb0a"
+    },
+    "xlsx_shared_100k_64": {
+      "input000.xlsx": "9f9160fc11300e111918081735960bf568bf71da3f927195c3a91778461a1cef"
+    },
+    "xlsx_inline_10k_512": {
+      "input000.xlsx": "1dd7f6b79819aa0dd64055806c83ca4ed01ea5180806dc93f0be0c7e059ceded"
+    },
+    "xlsx_shared_10k_256": {
+      "input000.xlsx": "ba59268e7390635c3d271eb0fa8fed38743108103cfb430a888ed219f2d47c6e"
+    },
+    "xlsx_offset_8sheets_10k_64": {
+      "input000.xlsx": "2d124f8ea89aaa56cca3931f435e5219511aced6888b52f11d7a9398ad67ceeb"
+    },
+    "csv_100files_1k_64": {
+      "input000.csv": "60fcb836328089e3c82f76652db810727ad183acc4c5cebf16d8923f1d8251d3",
+      "input001.csv": "8021588fc3eb08130a7f2c6e8341ecb3384c3b96e0d01d85f9585d947621447c",
+      "input002.csv": "f9406a6239bb1f33b439de823d92e29f344e846123650b7cd2dfd1f6b3999929",
+      "input003.csv": "10654e5a394b41807ca007033f14388fe3518d44b851ebbd562e0e3ddbb69a6c",
+      "input004.csv": "a0ac5cb5db22f3437c5adcacf5e8d108eaa08cf921fc6ba34733a59d9b11ffe5",
+      "input005.csv": "7dad9b36d77b519239aaabb75f96d3433a7faed003c99c43c03a87b24873833d",
+      "input006.csv": "bbc3935e7235a8f7ec1547fc8833a3b3eb16bf38c5365901c49447768f37d939",
+      "input007.csv": "db867ce1de6b29defc7c7795533fdd743b44a075632e6bf3a1aff78a70a2f369",
+      "input008.csv": "c5ea689802b4891d7b863701812d5c41095f97b941459f7ac05af536c72b174a",
+      "input009.csv": "30ae35400507926b81f92c8d2aea5a60c8cf11b2846e250129711fe596005852",
+      "input010.csv": "faa58a1ea931f9078c82a744119d1fb5c2349f9de28a23eab6901f16e56c364f",
+      "input011.csv": "95f4b34e55c2d198f765dc4f1e2a35e44863268bf9993e3625a473c550e01b30",
+      "input012.csv": "9b45b180d53e1a69fcb44eace292d840b8dfc0fa08da1248390e88e7b61dd0c6",
+      "input013.csv": "bb2d3ae8f04bfd8fe4f3adb9c6605ae40c3063002ef7049b7e48bdc30b7a6b9a",
+      "input014.csv": "c9b36d1f3d34d1fbc2a3a30594d92486d2a79f51c8d323754bffbec35a662a1e",
+      "input015.csv": "8a87890faff19e8e743f6116789209a0f82b4d898c4f1a38249b4f87fe5bb724",
+      "input016.csv": "d6019044a41f0c658568dbebc569b203f6c3e4c7d56fe6e53831d0b9e81f4c75",
+      "input017.csv": "33bc7e08b6e11c6759dc100991bff73638ab131a46fe137ad772aaec3531f4ea",
+      "input018.csv": "0122027e70e7b7fff21cde7483b81076499fb107755ecae704050466bce1bf10",
+      "input019.csv": "d2990769d4b6f649a6b2a0579f18a89d9bceabab6141102bb1aa00b6f04c708d",
+      "input020.csv": "4822d79656d430fbba49f1699ed5cf029f0555650904c8d3e02917a176d56f83",
+      "input021.csv": "7c46b63bb3f46d3741c004905c74e2e249bb69fbe0ffcf74214a1314d5d0e56e",
+      "input022.csv": "920a379bcd559b84cf1fe21b456c0e13fdddc4bfade093a5885f1f67b92c6571",
+      "input023.csv": "13a893e072124dded25572a814b8abf6b2c54e6c600b1dea2d4b85ce8e02cb68",
+      "input024.csv": "64f5f4aa53ffa8c267150e42e514afc2a265063663e2293cf318a2eda67ce517",
+      "input025.csv": "26a75efd075ab688838072983c1f0b6c403a68c63567609f02d1ea2701b0c919",
+      "input026.csv": "452aa1a6833433f3531d8b1b72bf916d67eb7ef44d7dbf0510d5c78d29299d04",
+      "input027.csv": "86e56c463690f2eddeb5e91f5774eead9c5290a7f25d3f7e144c74708c80f60a",
+      "input028.csv": "0f5b4a9b7c424182a4b5fa4ee918d6cf06d0ffc92d05bdbad83ad6d183fe196d",
+      "input029.csv": "5d6cc228868118e98d2a3c29487ea46bea097385a1b0269a8659540375d50a8b",
+      "input030.csv": "c6219704263eaeb205e91435d8669b05eb437039fea91ed30b81a4e3884525a1",
+      "input031.csv": "7f887cd1e9a0dbf626c19ed91df05e57e93138c68f99cefb3b718c6a1cd471a0",
+      "input032.csv": "245c7d465647d36a533648b2453cbcdfe162b9aaf5aab93f98d32df20268e728",
+      "input033.csv": "8adaeb69711cb6ba5244a82e2454758fa50f3a3d9589bc049a869aacfaf718f7",
+      "input034.csv": "6863943822f877b3ccbf6d8522c9ce92af67aae87b379943e4ecd634c6156f41",
+      "input035.csv": "81762ae82cf6a5018e15a7abc3c3d92d97a51e449ac8837131f581b1be76e8b0",
+      "input036.csv": "15543a78844b5117f3942cddadcdcc4a7f843c84136d3242f24cbee49ab5ef1e",
+      "input037.csv": "749ce6acbed813a2e49c6164ae3abb91e43166b31f2252edb323f36075f29dee",
+      "input038.csv": "8d8b19b85526fc52302847834254cd4449185509e8794a82e43fde5031b3fd37",
+      "input039.csv": "501010fbfa5f5d497cbe1b5f71e0835eb8f9cbcdbe4106bc9768eed88a511b83",
+      "input040.csv": "ebc4a8c52f97f7b03b5a75811b5bd358fd34b9756f23cdc3a82fe41f3c1e4513",
+      "input041.csv": "be2c96eed3b9cd1a2c2509a88a9f0d6325b5df1f70675789c9d76a5f4662b13e",
+      "input042.csv": "1b00a3916c364f6f425ceeda3499ad1ee49da7b6c2088d0f24e0a643d04db8e4",
+      "input043.csv": "7bc4f6a40e7a54f39b72775ecf718a1093c8c5bb83ac3b61be7d25155f6c7d30",
+      "input044.csv": "a559c8aaf143b745aa2e91519f3bf276697e5e32c73e71181990e5d18e7764b4",
+      "input045.csv": "ae4734e63b994bbc68df67f6646d08dea100792bf5e931abc3d75462e2734309",
+      "input046.csv": "fcb00f552b050bd9b749a99b2ab669516d1c5d738f3b28cfed714335241a940d",
+      "input047.csv": "086722d83f8c41a459eb63bce4baf2809ac061253b897ed4a76ee58690a4d4f8",
+      "input048.csv": "4019aeb8ce97cb58871b3f7c53b5d0c815331d7decfc590224fd5ac6deb13be2",
+      "input049.csv": "bbf223a172d1f3a1ffcbdcbc67545cc990167cb06bd4d5c8bf52276d6e8a975c",
+      "input050.csv": "2b539340d2ae365314e0df505f544f27773c8ad91d03164281e628e89c8d7c8f",
+      "input051.csv": "c085e67b710bf2927d04c9a2fecb07da7e565c7b471171cf386bae71e67ecdde",
+      "input052.csv": "e78eb954501e155c8912bb8c194322999414fc74159895df5bcd4f7173e06125",
+      "input053.csv": "53c71cb764ba4d0cb8315f0ec30368d6caed0e24f55a2cd8426bd08093820849",
+      "input054.csv": "f7cc3e061eed7f868869baa2ba6e75e95de94c86bda8d12c9943e92dbf6e20b9",
+      "input055.csv": "78bb331c3c830f42257324c81ca4f3e561d38335598533b39f7b09e3ed17cf04",
+      "input056.csv": "111862a385577e41dd48f1afb3f6ba8cd6d33612efbacf926cbee8b7622dbda7",
+      "input057.csv": "ffefdafb3ba83ba771d7d98433eaa2e5d05a6e44ab9533690d461f998d01f64c",
+      "input058.csv": "f033e9991e5e16c36bfa9b7f462ce6ad817537299e79ead756936073206a6754",
+      "input059.csv": "ca531e61cde513b185ed2904ee42ecb4e53cd89b6e0bed03b8d60098ca314e41",
+      "input060.csv": "86e7bba957049ef999366cb4739f32b069fe090653cff1533e7335668efef048",
+      "input061.csv": "3c6909ffeb4a3e1f2401049b96af016515f0ddbac82ee4ae4c05f0296d438f48",
+      "input062.csv": "e3ab2629bea2ccefe30f8cad748e07d1943f7bb8ecaecbca9eb8ee64890cab9a",
+      "input063.csv": "51db14b8d664893b6b4fd956a1d8ab608449b5fdf76de25ba93d8ae5f177edff",
+      "input064.csv": "dc590787fa3b4659e427badb58cd75d654cd76e84efe93358a23faa61d252b84",
+      "input065.csv": "ffd37201efd63ed281483a6efc7e2d863c891836675203a5cf9afde1d104da08",
+      "input066.csv": "935d88bf9ebafa7a86b0aaf85c3dc9a8ca75e3a7405204ff3d7d1b97f7765592",
+      "input067.csv": "1b1edc630b6edc0ee7146d74f4dbb5b9c047da14dd06d73b834dd070913a9549",
+      "input068.csv": "c0a5a5d14b421b808532cc3fef65bc9c68a73be1778586efd14db854eea1788a",
+      "input069.csv": "53f3d00ae6661d5db07a4bc735ed5149e50cf35115492e6de26da948e8ebe71f",
+      "input070.csv": "f4e2e5ffee42b379d145667d0bb58ee654f4069276e7ea250b0328af1b95562b",
+      "input071.csv": "ff09502b5f4d5af9ec899b0f0ccbdd49dc0aac04306b7f41f0136d3ecdca43fd",
+      "input072.csv": "0523ffc97ba66b29bddfdcfdfd1b44858f22ed8dbeab71ec460e35326d6b7797",
+      "input073.csv": "099bcd7a3bdf2d757f5ca61f8482bb4cf937fecabd7086c492630694719ea890",
+      "input074.csv": "9c112941e915f37be5c0d30ca6e394720aa8983c17087eb03bc20924d46fa73a",
+      "input075.csv": "932071168f2cfbfc9dee163298c96756799735a78c5a060e16b9057290aa91f1",
+      "input076.csv": "c8a07f64e452f648bd7798f9108d24f79b2d2715ccf3f86bcb1fc68a81110e5c",
+      "input077.csv": "f86061b5191f75e81c0da373fe16d63f7dfdc41d4ca15a08507920408fbd00ba",
+      "input078.csv": "9f75012803e769cbd2c328134bc4fd66f013484fa457ca8a2d6679fc07572bf7",
+      "input079.csv": "186c82d2aeff2e6913f8f53b99903b28e012bd27f7319c05403609ec44db6473",
+      "input080.csv": "fdb2a9f5a4e60950624c43d17c5cdb7a294ab040d4dd4186a4aa1909aa88f74b",
+      "input081.csv": "713d57258a84b5b98aa13a7fef867234c0d2923a67c4a8836f7b9b3978430677",
+      "input082.csv": "c693fa7d8713e7367b81919e655456c345012c6e1ca7068a85e753d430c4a5c3",
+      "input083.csv": "858a314fcf3873d5fd2e45b4d00e775e176109b1fad6fe077b3e28204f2b22dd",
+      "input084.csv": "4b1e4ab6776c4b1fa5f981c6cde1e9c7345d2d01991321a58eddefc7cc7f2651",
+      "input085.csv": "ece96760b99e0f49329c10fdf9a28a72057d22507c64b31a4245d530cfedd91f",
+      "input086.csv": "2d7612b86f9aa1ce8bdf8c3eb8c1f97e5dd186c00219159cc3a1940a35842f38",
+      "input087.csv": "54d97181271e7b5a9d33d455b204cb5b730a142742ba05410ea75c8d05db6952",
+      "input088.csv": "c4731904aa03df264937ccac55d5287916be45586c444b2763509b97e62b8ceb",
+      "input089.csv": "4c846bff64ee8fd8d557f726bd851bf654e78f78fbe8e91c005c290f2197dc59",
+      "input090.csv": "efaf738e21d11b6780e03df1a3fe4c257695015b081313d6d6564c5d9211aca8",
+      "input091.csv": "ce101cef56cbb2180fd1b86f727eac9c160cde7ee8447cc579696e0858395682",
+      "input092.csv": "e1dc1cc01dae6ffa9eaab4de844400cb88563a0b9aaf43b7cc9f67c6876b7275",
+      "input093.csv": "8bc4ef1b4494320c32c089dd7ec9706372064f1099c214dceabaad001cc8e3c3",
+      "input094.csv": "3b2c5378d31e8c616b4de6eec82942e6fdaa7c9f69520c2e0fa8afd2a53bc4ca",
+      "input095.csv": "8fa10ca8e70aef96fa4465e6bccb0f3da898374731165aef66713ec2b1784139",
+      "input096.csv": "bfcbede85be830a5c7db64e69e00ae96e07a79fcef1dc7d40e34f569cce8c70c",
+      "input097.csv": "612a0506789cac26650c3b87c7b7029bfb50d96243e462be87b0097c70d29604",
+      "input098.csv": "a88d371bdf3f9b7f644c4a323855f361724c7dce082b2ff496d5400528c900f0",
+      "input099.csv": "7db8e6bb3bb7a8add32a986a0f0b43a8706e749860eb5dc7ec8ea52611b385ef"
+    },
+    "csv_10m_8": {
+      "input000.csv": "717538b6071502567017467b56c834bf85c63926f13000244041d63db7e0ce60"
+    },
+    "csv_numeric_edges_100k_64": {
+      "input000.csv": "b3f214e7192081a9a700c8986d03a3c4f7e8939351eababb278113f99b44c6b8"
+    },
+    "xlsx_numeric_edges_100k_64": {
+      "input000.xlsx": "47384ec181dbe6309751d34aefef42b2582e5f44b8aa9a33872562d241a0d367"
+    }
+  },
+  "hardware": {
+    "memory_bytes": 17179869184,
+    "logical_cpus": 10
+  },
+  "release_version": "0.7.14",
+  "candidate_build_version": "0.7.13 before version bump",
+  "source_archive": "measured-candidate-sources.tar.gz"
+}

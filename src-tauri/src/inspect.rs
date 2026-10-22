@@ -1,7 +1,7 @@
 use crate::merge::{preview_mapped_row, CellValue};
 use crate::model::{build_output_plan, header_key, MergeOptions, SourceKind, SourceTable};
 use crate::scan::{
-    csv_encoding, decode_csv_field, for_each_xlsx_row, is_markup_workbook, is_xlsx_path,
+    csv_encoding, decode_csv_field, for_each_xlsx_preview_row, is_markup_workbook, is_xlsx_path,
     open_detected_workbook, open_xlsx_workbook, read_markup_workbook,
 };
 use anyhow::{Context, Result};
@@ -44,76 +44,211 @@ pub struct CheckIssue {
     pub detail: String,
 }
 
-pub fn preview_source(table: &SourceTable, limit: usize) -> Result<PreviewTable> {
-    let mut rows = Vec::new();
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct SampleKey {
+    path: std::path::PathBuf,
+    version: crate::file_cache::FileVersion,
+    sheet: String,
+    delimiter: Option<u8>,
+    header_row: usize,
+    header_rows: usize,
+    width: usize,
+}
+struct Sample {
+    limit: usize,
+    values: Vec<Vec<CellValue>>,
+    display: Vec<Vec<String>>,
+}
+#[derive(Default)]
+struct SampleReader {
+    // Keep at most one parsed workbook alive; consecutive Sheets share its string table.
+    workbook: Option<(std::path::PathBuf, crate::scan::XlsxWorkbook)>,
+}
+static SAMPLES: std::sync::OnceLock<
+    std::sync::Mutex<crate::file_cache::Cache<SampleKey, std::sync::Arc<Sample>>>,
+> = std::sync::OnceLock::new();
+pub(crate) fn invalidate_source_preview(path: &std::path::Path) {
+    crate::scan::invalidate_cached_source(path);
+    if let Some(cache) = SAMPLES.get() {
+        if let Ok(mut cache) = cache.lock() {
+            cache.retain(|key| key.path != path);
+        }
+    }
+}
+fn sample_key(table: &SourceTable) -> Option<SampleKey> {
+    Some(SampleKey {
+        path: table.path.clone(),
+        version: crate::file_cache::FileVersion::read(&table.path)?,
+        sheet: table.sheet_name.clone(),
+        delimiter: match table.kind {
+            SourceKind::Csv { delimiter } => Some(delimiter),
+            SourceKind::Workbook => None,
+        },
+        header_row: table.header_row,
+        header_rows: table.header_rows,
+        width: table.headers.len(),
+    })
+}
+fn source_sample(
+    table: &SourceTable,
+    limit: usize,
+    reader: &mut SampleReader,
+) -> Result<std::sync::Arc<Sample>> {
+    if limit == 0 {
+        return Ok(std::sync::Arc::new(Sample {
+            limit,
+            values: vec![],
+            display: vec![],
+        }));
+    }
+    let key = sample_key(table);
+    let cache = SAMPLES.get_or_init(|| {
+        std::sync::Mutex::new(crate::file_cache::Cache::new(128, 64 * 1024 * 1024))
+    });
+    if let Some(key) = &key {
+        if let Some(sample) = cache.lock().ok().and_then(|mut cache| cache.get(key)) {
+            if sample.limit >= limit || sample.values.len() < sample.limit {
+                return Ok(sample);
+            }
+        }
+    }
+    let mut values = Vec::new();
+    let mut display = Vec::new();
     match table.kind {
         SourceKind::Csv { delimiter } => {
             let encoding = csv_encoding(&table.path)?;
-            let mut reader = ReaderBuilder::new()
+            let mut csv = ReaderBuilder::new()
                 .has_headers(false)
                 .flexible(true)
                 .delimiter(delimiter)
                 .from_path(&table.path)?;
-            let skip = table.header_row + table.header_rows - 1;
-            for record in reader.byte_records().skip(skip).take(limit) {
-                rows.push(
-                    record?
-                        .iter()
-                        .map(|field| decode_csv_field(field, encoding))
-                        .collect(),
-                );
+            for record in csv
+                .byte_records()
+                .skip(table.header_row + table.header_rows - 1)
+                .take(limit)
+            {
+                let row: Vec<String> = record?
+                    .iter()
+                    .map(|field| decode_csv_field(field, encoding))
+                    .collect();
+                values.push(row.iter().cloned().map(CellValue::Text).collect());
+                display.push(row);
             }
         }
         SourceKind::Workbook => {
             if is_xlsx_path(&table.path) {
-                match open_xlsx_workbook(&table.path) {
-                    Ok(mut workbook) => {
-                        for_each_xlsx_row(
-                            &mut workbook,
-                            &table.sheet_name,
-                            table.header_row + table.header_rows - 1,
-                            Some(limit),
-                            |row| {
-                                let mut values = vec![String::new(); table.headers.len()];
-                                for (index, value) in row.iter().enumerate().take(values.len()) {
-                                    values[index] = value.to_string();
-                                }
-                                rows.push(values);
-                                Ok(())
-                            },
-                        )?;
+                if !reader
+                    .workbook
+                    .as_ref()
+                    .is_some_and(|(path, _)| path == &table.path)
+                {
+                    reader.workbook = None;
+                    if let Ok(workbook) = open_xlsx_workbook(&table.path) {
+                        reader.workbook = Some((table.path.clone(), workbook));
                     }
-                    Err(primary_error) => rows.extend(
-                        fallback_workbook_text_rows(table, limit)
-                            .with_context(|| format!("常规 XLSX 读取失败：{primary_error:#}"))?,
-                    ),
+                }
+                if let Some((_, workbook)) = &mut reader.workbook {
+                    for_each_xlsx_preview_row(
+                        workbook,
+                        &table.path,
+                        &table.sheet_name,
+                        table.header_row + table.header_rows - 1,
+                        limit,
+                        |row| {
+                            let mut text = vec![String::new(); table.headers.len()];
+                            for (index, value) in row.iter().enumerate().take(text.len()) {
+                                text[index] = value.to_string();
+                            }
+                            values.push(
+                                row.into_iter()
+                                    .map(CellValue::from_calamine_owned)
+                                    .collect(),
+                            );
+                            display.push(text);
+                            Ok(())
+                        },
+                    )?;
+                } else {
+                    for row in fallback_workbook_text_rows(table, limit)? {
+                        values.push(row.iter().cloned().map(CellValue::from_text).collect());
+                        display.push(row);
+                    }
                 }
             } else {
                 match open_workbook_auto(&table.path) {
                     Ok(mut workbook) => {
                         let range = workbook.worksheet_range(&table.sheet_name)?;
-                        rows.extend(
-                            range
-                                .rows()
-                                .skip(table.header_row + table.header_rows - 1)
-                                .take(limit)
-                                .map(|row| row.iter().map(Data::to_string).collect()),
-                        );
+                        for row in range
+                            .rows()
+                            .skip(table.header_row + table.header_rows - 1)
+                            .take(limit)
+                        {
+                            values.push(row.iter().map(CellValue::from_calamine).collect());
+                            display.push(row.iter().map(Data::to_string).collect());
+                        }
                     }
-                    Err(primary_error) => rows.extend(
-                        fallback_workbook_text_rows(table, limit)
-                            .with_context(|| format!("常规读取失败：{primary_error}"))?,
-                    ),
+                    Err(_) => {
+                        for row in fallback_workbook_text_rows(table, limit)? {
+                            values.push(row.iter().cloned().map(CellValue::from_text).collect());
+                            display.push(row);
+                        }
+                    }
                 }
             }
         }
     }
+    if key != sample_key(table) {
+        anyhow::bail!("读取期间源文件已修改，请重新读取");
+    }
+    let bytes = 1024
+        + values
+            .iter()
+            .map(|row: &Vec<CellValue>| {
+                row.capacity() * std::mem::size_of::<CellValue>()
+                    + row
+                        .iter()
+                        .map(|v| match v {
+                            CellValue::Text(s) => s.capacity(),
+                            _ => 0,
+                        })
+                        .sum::<usize>()
+            })
+            .sum::<usize>()
+        + display
+            .iter()
+            .map(|row: &Vec<String>| {
+                row.capacity() * std::mem::size_of::<String>()
+                    + row.iter().map(String::capacity).sum::<usize>()
+            })
+            .sum::<usize>();
+    let sample = std::sync::Arc::new(Sample {
+        limit,
+        values,
+        display,
+    });
+    if limit <= 1000 {
+        if let Some(key) = key {
+            if let Ok(mut cache) = cache.lock() {
+                cache.insert(key, sample.clone(), bytes);
+            }
+        }
+    }
+    Ok(sample)
+}
+pub fn preview_source(table: &SourceTable, limit: usize) -> Result<PreviewTable> {
+    preview_source_with_reader(table, limit, &mut SampleReader::default())
+}
+fn preview_source_with_reader(
+    table: &SourceTable,
+    limit: usize,
+    reader: &mut SampleReader,
+) -> Result<PreviewTable> {
+    let sample = source_sample(table, limit, reader)?;
     Ok(PreviewTable {
         headers: table.headers.clone(),
-        rows,
+        rows: sample.display.iter().take(limit).cloned().collect(),
     })
 }
-
 pub fn preview_merged(
     tables: &[SourceTable],
     options: &MergeOptions,
@@ -122,11 +257,12 @@ pub fn preview_merged(
     let plan = build_output_plan(tables, options);
     let mut groups = Vec::new();
     let mut seen = HashSet::new();
+    let mut reader = SampleReader::default();
     for (source_index, table) in tables.iter().enumerate().filter(|(_, table)| table.enabled) {
-        let source_rows = preview_source_values(table, limit)?;
-        let mut rows = Vec::with_capacity(source_rows.len());
-        for source_row in source_rows {
-            if let Some(output) = preview_mapped_row(source_row, table, &plan, options) {
+        let sample = source_sample(table, limit, &mut reader)?;
+        let mut rows = Vec::with_capacity(sample.values.len().min(limit));
+        for source_row in sample.values.iter().take(limit) {
+            if let Some(output) = preview_mapped_row(source_row.clone(), table, &plan, options) {
                 if !options.deduplicate || seen.insert(output.clone()) {
                     rows.push(output);
                 }
@@ -137,7 +273,7 @@ pub fn preview_merged(
             source_file: table
                 .path
                 .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
+                .map(|v| v.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             source_sheet: table.sheet_name.clone(),
             rows,
@@ -147,73 +283,6 @@ pub fn preview_merged(
         headers: plan.headers,
         groups,
     })
-}
-
-fn preview_source_values(table: &SourceTable, limit: usize) -> Result<Vec<Vec<CellValue>>> {
-    let mut rows = Vec::new();
-    match table.kind {
-        SourceKind::Csv { delimiter } => {
-            let encoding = csv_encoding(&table.path)?;
-            let mut reader = ReaderBuilder::new()
-                .has_headers(false)
-                .flexible(true)
-                .delimiter(delimiter)
-                .from_path(&table.path)?;
-            let skip = table.header_row + table.header_rows - 1;
-            for record in reader.byte_records().skip(skip).take(limit) {
-                rows.push(
-                    record?
-                        .iter()
-                        .map(|value| CellValue::Text(decode_csv_field(value, encoding)))
-                        .collect(),
-                );
-            }
-        }
-        SourceKind::Workbook => {
-            if is_xlsx_path(&table.path) {
-                match open_xlsx_workbook(&table.path) {
-                    Ok(mut workbook) => {
-                        for_each_xlsx_row(
-                            &mut workbook,
-                            &table.sheet_name,
-                            table.header_row + table.header_rows - 1,
-                            Some(limit),
-                            |row| {
-                                rows.push(row.iter().map(CellValue::from_calamine).collect());
-                                Ok(())
-                            },
-                        )?;
-                    }
-                    Err(primary_error) => rows.extend(
-                        fallback_workbook_text_rows(table, limit)
-                            .with_context(|| format!("常规 XLSX 读取失败：{primary_error:#}"))?
-                            .into_iter()
-                            .map(|row| row.into_iter().map(CellValue::from_text).collect()),
-                    ),
-                }
-            } else {
-                match open_workbook_auto(&table.path) {
-                    Ok(mut workbook) => {
-                        let range = workbook.worksheet_range(&table.sheet_name)?;
-                        rows.extend(
-                            range
-                                .rows()
-                                .skip(table.header_row + table.header_rows - 1)
-                                .take(limit)
-                                .map(|row| row.iter().map(CellValue::from_calamine).collect()),
-                        );
-                    }
-                    Err(primary_error) => rows.extend(
-                        fallback_workbook_text_rows(table, limit)
-                            .with_context(|| format!("常规读取失败：{primary_error}"))?
-                            .into_iter()
-                            .map(|row| row.into_iter().map(CellValue::from_text).collect()),
-                    ),
-                }
-            }
-        }
-    }
-    Ok(rows)
 }
 
 fn fallback_workbook_text_rows(table: &SourceTable, limit: usize) -> Result<Vec<Vec<String>>> {
@@ -398,8 +467,9 @@ pub fn preflight_for_destination(
     if !database {
         let mut sampled_types = HashMap::<String, HashSet<&'static str>>::new();
         let mut non_empty_counts = HashMap::<String, usize>::new();
+        let mut sample_reader = SampleReader::default();
         for table in &enabled {
-            match preview_source(table, 100) {
+            match preview_source_with_reader(table, 100, &mut sample_reader) {
                 Ok(preview) => {
                     for (column, header) in preview.headers.iter().enumerate() {
                         let key = header_key(header);
@@ -454,22 +524,11 @@ pub fn preflight_for_destination(
             }
         }
     }
-    let mut similar = Vec::new();
-    let names = union.iter().collect::<Vec<_>>();
-    for left in 0..names.len() {
-        for right in left + 1..names.len() {
-            let score = strsim::normalized_levenshtein(names[left], names[right]);
-            if (0.72..1.0).contains(&score) {
-                similar.push(format!("{} ↔ {}", names[left], names[right]));
-            }
-            if similar.len() >= 8 {
-                break;
-            }
-        }
-        if similar.len() >= 8 {
-            break;
-        }
-    }
+    let pairs = crate::inspect_similarity::similar_headers(union.iter().cloned().collect());
+    let similar = pairs
+        .iter()
+        .map(|(left, right)| format!("{left} ↔ {right}"))
+        .collect::<Vec<_>>();
     if !similar.is_empty() {
         issues.push(issue(
             IssueLevel::Warning,
@@ -556,5 +615,68 @@ fn issue(level: IssueLevel, title: &str, detail: &str) -> CheckIssue {
         level,
         title: title.to_owned(),
         detail: detail.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    #[test]
+    fn raw_samples_expand_and_current_mapping_never_reuses_old_results() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("source.csv");
+        let mut csv = csv::Writer::from_path(&path)?;
+        csv.write_record(["编号", "金额"])?;
+        for index in 0..150 {
+            csv.write_record([format!("00{index}"), format!("{index}.125")])?;
+        }
+        csv.flush()?;
+        let mut table = crate::scan::scan_file(&path)?.0.remove(0);
+        let mut reader = SampleReader::default();
+        let first = source_sample(&table, 30, &mut reader)?;
+        assert_eq!(first.values.len(), 30);
+        let smaller = source_sample(&table, 5, &mut reader)?;
+        assert!(std::sync::Arc::ptr_eq(&first, &smaller));
+        let expanded = source_sample(&table, 100, &mut reader)?;
+        assert_eq!(expanded.values.len(), 100);
+        assert!(!std::sync::Arc::ptr_eq(&first, &expanded));
+        table.mappings[0].target_name = "独立编号".into();
+        table.mappings[1].enabled = false;
+        let merged = preview_merged(&[table.clone()], &MergeOptions::default(), 5)?;
+        assert_eq!(merged.headers, ["独立编号"]);
+        assert_eq!(merged.groups[0].rows[0], ["000"]);
+        invalidate_source_preview(&path);
+        assert!(!std::sync::Arc::ptr_eq(
+            &expanded,
+            &source_sample(&table, 100, &mut reader)?
+        ));
+        // A replacement with another encoding must invalidate samples and encoding.
+        drop(csv);
+        let (bytes, _, errors) = encoding_rs::GBK.encode("编号,金额\n新值,9\n");
+        assert!(!errors);
+        std::fs::write(&path, bytes.as_ref())?;
+        assert_eq!(
+            preview_source(&table, 30)?.rows,
+            vec![vec!["新值".to_owned(), "9".to_owned()]]
+        );
+        std::fs::remove_file(&path)?;
+        assert!(preview_source(&table, 30).is_err());
+        Ok(())
+    }
+    #[test]
+    fn zero_row_preview_does_not_open_source() {
+        let table = crate::model::SourceTable {
+            path: "missing.xlsx".into(),
+            sheet_name: "missing".into(),
+            kind: SourceKind::Workbook,
+            header_row: 1,
+            header_rows: 1,
+            suggested_header_row: 1,
+            headers: vec!["a".into()],
+            estimated_rows: 0,
+            enabled: true,
+            mappings: vec![],
+        };
+        assert!(preview_source(&table, 0).unwrap().rows.is_empty());
     }
 }

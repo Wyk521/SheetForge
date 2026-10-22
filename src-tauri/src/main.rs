@@ -5,7 +5,9 @@ mod config;
 mod database;
 #[cfg(test)]
 mod engine_tests;
+mod file_cache;
 mod inspect;
+mod inspect_similarity;
 mod merge;
 mod model;
 #[cfg(test)]

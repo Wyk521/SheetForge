@@ -164,6 +164,9 @@ pub fn spawn_group_reload(
     std::thread::spawn(move || {
         let mut tables = Vec::with_capacity(sources.len());
         let mut failures = Vec::new();
+        let mut sources = sources;
+        sources.sort_by(|(_, a), (_, b)| a.path.cmp(&b.path));
+        let mut reader = super::workbook::SheetReader::default();
         for (index, source) in sources {
             let result = match source.kind {
                 SourceKind::Csv { delimiter } => scan_csv(
@@ -173,13 +176,7 @@ pub fn spawn_group_reload(
                     header_rows,
                     source.suggested_header_row,
                 ),
-                SourceKind::Workbook => scan_workbook_sheet(
-                    &source.path,
-                    &source.sheet_name,
-                    header_row,
-                    header_rows,
-                    source.suggested_header_row,
-                ),
+                SourceKind::Workbook => reader.scan(&source, header_row, header_rows),
             };
             match result {
                 Ok(mut table) => {

@@ -67,14 +67,17 @@ fn source_preview_command_reads_on_the_background_runtime() {
     let dir = tempfile::tempdir().unwrap();
     let table = scan_csv(&dir, "预览.csv", "姓名,金额\n张三,100\n李四,200\n");
     let preview =
-        tauri::async_runtime::block_on(crate::commands::preview_source(table.clone(), 1)).unwrap();
+        tauri::async_runtime::block_on(crate::commands::preview_source(table.clone(), 1, None))
+            .unwrap();
     assert_eq!(preview.headers, ["姓名", "金额"]);
     assert_eq!(preview.rows, [vec!["张三", "100"]]);
     let missing = SourceTable {
         path: dir.path().join("不存在.csv"),
         ..table
     };
-    assert!(tauri::async_runtime::block_on(crate::commands::preview_source(missing, 1)).is_err());
+    assert!(
+        tauri::async_runtime::block_on(crate::commands::preview_source(missing, 1, None)).is_err()
+    );
 }
 
 #[test]
@@ -1052,5 +1055,73 @@ fn tsv_and_xlsm_inputs_use_the_same_output_pipeline() {
     assert_eq!(
         merge_and_read(tables, MergeOptions::default()),
         vec![vec!["id", "name"], vec!["001", "甲"], vec!["002", "乙"]]
+    );
+}
+
+#[test]
+fn fast_export_preserves_typed_values_and_default_options_compatibility() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("typed.xlsx");
+    let mut book = Workbook::new();
+    let sheet = book.add_worksheet();
+    for (index, name) in ["编号", "金额", "日期", "布尔", "时间"].iter().enumerate() {
+        sheet.write_string(0, index as u16, *name).unwrap();
+    }
+    sheet
+        .write_string(1, 0, "00123456789012345678901234567890")
+        .unwrap();
+    sheet.write_number(1, 1, -1.234567891e100).unwrap();
+    let date = ExcelDateTime::from_ymd(2026, 10, 22)
+        .unwrap()
+        .and_hms(12, 34, 56.125)
+        .unwrap();
+    sheet
+        .write_datetime_with_format(
+            1,
+            2,
+            &date,
+            &Format::new().set_num_format("yyyy-mm-dd hh:mm:ss.000"),
+        )
+        .unwrap();
+    sheet.write_boolean(1, 3, true).unwrap();
+    let time = ExcelDateTime::from_hms(3, 4, 5.375).unwrap();
+    sheet
+        .write_datetime_with_format(1, 4, &time, &Format::new().set_num_format("hh:mm:ss.000"))
+        .unwrap();
+    book.save(&path).unwrap();
+    let tables = scan_file(&path).unwrap().0;
+    let mut outputs = Vec::new();
+    for fast in [false, true] {
+        let output = dir.path().join(format!("out-{fast}.xlsx"));
+        merge_tables(
+            &tables,
+            &MergeOptions {
+                fast_xlsx: fast,
+                ..Default::default()
+            },
+            &output,
+            &|_, _, _| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+        outputs.push(
+            open_workbook_auto(output)
+                .unwrap()
+                .worksheet_range("合并结果_001")
+                .unwrap(),
+        );
+    }
+    assert_eq!(outputs[0], outputs[1]);
+    assert!(matches!(outputs[0].get((1, 0)), Some(Data::String(s)) if s.starts_with("001234")));
+    assert!(matches!(outputs[0].get((1, 1)), Some(Data::Float(_))));
+    assert!(matches!(outputs[0].get((1, 2)), Some(Data::DateTime(_))));
+    assert_eq!(outputs[0].get((1, 3)), Some(&Data::Bool(true)));
+    let mut old = serde_json::to_value(MergeOptions::default()).unwrap();
+    old.as_object_mut().unwrap().remove("fast_xlsx");
+    assert!(
+        !serde_json::from_value::<MergeOptions>(old)
+            .unwrap()
+            .fast_xlsx
     );
 }

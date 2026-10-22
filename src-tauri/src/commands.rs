@@ -160,9 +160,27 @@ pub fn reload_group(
     spawn_group_reload(sources, header_row, header_rows, app);
 }
 
+fn preview_slots() -> &'static Arc<tokio::sync::Semaphore> {
+    static SLOTS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2)))
+}
+
 #[tauri::command]
-pub async fn preview_source(table: SourceTable, limit: usize) -> Result<PreviewTable, String> {
+pub async fn preview_source(
+    table: SourceTable,
+    limit: usize,
+    refresh: Option<bool>,
+) -> Result<PreviewTable, String> {
+    let permit = preview_slots()
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|error| error.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        if refresh.unwrap_or(false) {
+            crate::inspect::invalidate_source_preview(&table.path);
+        }
         inspect_preview_source(&table, limit).map_err(|error| format!("{error:#}"))
     })
     .await
@@ -170,12 +188,22 @@ pub async fn preview_source(table: SourceTable, limit: usize) -> Result<PreviewT
 }
 
 #[tauri::command]
-pub fn preview_merged(
+pub async fn preview_merged(
     tables: Vec<SourceTable>,
     options: MergeOptions,
     limit: usize,
 ) -> Result<MergedPreview, String> {
-    inspect_preview_merged(&tables, &options, limit).map_err(|error| format!("{error:#}"))
+    let permit = preview_slots()
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        inspect_preview_merged(&tables, &options, limit).map_err(|error| format!("{error:#}"))
+    })
+    .await
+    .map_err(|error| format!("预览读取任务失败：{error}"))?
 }
 
 #[tauri::command]

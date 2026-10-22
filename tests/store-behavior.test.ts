@@ -358,6 +358,39 @@ describe("预览请求", () => {
     expect(called("preview_source")).toHaveLength(2);
     expect(store.sourcePreview).toEqual(latest);
   });
+  it("快速切换来源最多读取两张表，尚未开始的旧预览让位给当前来源", async () => {
+    const store = useMergeStore();
+    store.sources = [0, 1, 2, 3].map(index => table(`${index}.xlsx`));
+    const reads = [0, 1, 2, 3].map(() => deferred<PreviewTable>());
+    native.invoke.mockImplementation((command, args) => command === "preview_source"
+      ? reads[Number(args.table.path[0])].promise : Promise.resolve({ headers: [] }));
+    const requests = [0, 1, 2, 3].map(index => store.showSourcePreview(index));
+    expect(called("preview_source")).toHaveLength(2);
+    reads[0].resolve({ headers: ["姓名"], rows: [["旧"]] });
+    await requests[0];
+    await Promise.resolve();
+    expect(called("preview_source").map(call => call[1].table.path)).toEqual(["0.xlsx", "1.xlsx", "3.xlsx"]);
+    reads[3].resolve({ headers: ["姓名"], rows: [["最新"]] });
+    reads[1].resolve({ headers: ["姓名"], rows: [["旧二"]] });
+    await Promise.all(requests);
+    expect(store.sourcePreview?.rows).toEqual([["最新"]]);
+    expect(native.error).not.toHaveBeenCalled();
+  });
+  it("切回仍在读取的来源复用同一请求，并丢弃未开始的其他来源", async () => {
+    const store = useMergeStore();
+    store.sources = [0, 1, 2].map(index => table(`${index}.xlsx`));
+    const reads = [deferred<PreviewTable>(), deferred<PreviewTable>()];
+    native.invoke.mockImplementation((command, args) => command === "preview_source"
+      ? reads[Number(args.table.path[0])].promise : Promise.resolve({ headers: [] }));
+    const requests = [0, 1, 2, 0].map(index => store.showSourcePreview(index));
+    reads[1].resolve({ headers: ["姓名"], rows: [["二"]] });
+    await requests[1];
+    reads[0].resolve({ headers: ["姓名"], rows: [["一"]] });
+    await Promise.all(requests);
+    expect(called("preview_source")).toHaveLength(2);
+    expect(store.sourcePreview?.rows).toEqual([["一"]]);
+    expect(native.error).not.toHaveBeenCalled();
+  });
   it("重新导入同一路径或改变表头后重新读取预览", async () => {
     const store = useMergeStore();
     store.sources = [table()];
@@ -681,6 +714,47 @@ describe("异步状态和事件生命周期", () => {
     old.resolve({ headers: ["过期"] });
     await pending;
     expect(store.planHeaders).toEqual(["最新"]);
+  });
+  it("同一轮连续规则编辑合并为一次计划请求，旧响应立即失效", async () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    const old = deferred<{ headers: string[] }>();
+    native.invoke.mockImplementationOnce(() => old.promise).mockResolvedValue({ headers: ["当前"] });
+    const pending = store.refreshPlan();
+    for (let index = 0; index < 100; index++) store.setAdvanced({ include_source_file: index % 2 === 0 });
+    old.resolve({ headers: ["旧"] });
+    await pending;
+    await Promise.resolve();
+    expect(called("get_plan")).toHaveLength(2);
+    expect(called("get_plan")[1][1].options.include_source_file).toBe(false);
+    expect(store.planHeaders).toEqual(["当前"]);
+  });
+  it("来源移动、停用和名称变更后字段来源仍指向当前表", () => {
+    const store = useMergeStore();
+    store.sources = [table("一.xlsx"), table("二.xlsx")];
+    expect(store.fieldGroups[0].count).toBe(2);
+    store.sources.reverse();
+    store.sources[0].sheet_name = "新工作表";
+    store.sources[1].enabled = false;
+    const group = store.fieldGroups.find(group => group.key === "姓名")!;
+    expect(group.tables).toHaveLength(1);
+    expect(group.tables[0]).toMatchObject({ index: 0, name: "二.xlsx  /  新工作表" });
+    store.setSourceFieldTargets([group.tables[0].id], "独立姓名");
+    expect(store.sources[0].mappings[0].target_name).toBe("独立姓名");
+    expect(store.sources[1].mappings[0].target_name).toBe("姓名");
+  });
+  it("筛选和去重不改变表头，编辑时只作废结果而不重发整批计划", async () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    await store.refreshPlan();
+    store.preview = { headers: ["旧"], groups: [] };
+    store.checkRan = true;
+    for (let index = 0; index < 100; index++) store.setAdvanced({ filter_text: String(index), deduplicate: true });
+    await Promise.resolve();
+    expect(called("get_plan")).toHaveLength(1);
+    expect(store.planHeaders).toEqual(["姓名", "金额"]);
+    expect(store.preview).toBeNull();
+    expect(store.checkRan).toBe(false);
   });
   it("修改规则立即作废结果预览和检查", () => {
     const store = useMergeStore();

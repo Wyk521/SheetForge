@@ -1,16 +1,18 @@
 //! Shared streaming merge pipeline. Output adapters consume the same mapped cells.
+mod dedup;
+use dedup::Deduplicator;
 mod row;
 mod tasks;
 mod xlsx;
 
 use crate::model::{build_output_plan, MergeOptions, OutputPlan, SourceKind, SourceTable};
 use crate::scan::{
-    for_each_csv_row, for_each_xlsx_row, is_markup_workbook, is_xlsx_path, open_detected_workbook,
-    open_xlsx_workbook, read_markup_workbook,
+    for_each_csv_row, for_each_xlsx_source_row, is_markup_workbook, is_xlsx_path,
+    open_detected_workbook, open_xlsx_workbook, read_markup_workbook,
 };
 use anyhow::{anyhow, Context, Result};
 use calamine::{open_workbook_auto, Reader};
-use row::{build_row_mapping, is_blank_source_row, mapped_row, passes_filter, row_key, RowMapping};
+use row::{build_row_mapping, is_blank_source_row, mapped_row, RowFilter, RowMapping};
 pub(crate) use row::{preview_mapped_row, CellValue};
 use std::{
     collections::HashSet,
@@ -74,6 +76,8 @@ pub(crate) fn merge_tables(
     }
 
     let mut sink = XlsxSink::new(plan.clone())?;
+    #[cfg(test)]
+    sink.set_fast_compression(options.fast_xlsx);
     let rows = merge_into_sink(&enabled, options, &plan, &mut sink, emit, cancel)?;
     match rows {
         Some(rows) => finish_sink(sink, output, rows, cancel),
@@ -164,7 +168,9 @@ fn merge_appended<S: RowSink>(
 ) -> Result<Option<u64>> {
     let total = tables.iter().map(|table| table.estimated_rows).sum();
     let mut current = 0_u64;
-    let mut dedup = HashSet::new();
+    let filter = RowFilter::new(plan, options);
+    let mut last_progress = std::time::Instant::now();
+    let mut dedup = Deduplicator::default();
     let mut processed_workbooks = HashSet::<PathBuf>::new();
 
     for (table_index, table) in tables.iter().enumerate() {
@@ -181,6 +187,8 @@ fn merge_appended<S: RowSink>(
                         options,
                         plan,
                         &mut dedup,
+                        &filter,
+                        &mut last_progress,
                         sink,
                         &mut current,
                         total,
@@ -214,7 +222,7 @@ fn merge_appended<S: RowSink>(
                     match open_xlsx_workbook(&table.path) {
                         Ok(mut workbook) => {
                             for &(sheet_index, sheet) in &same_file {
-                                for_each_xlsx_row(
+                                for_each_xlsx_source_row(
                                     &mut workbook,
                                     &sheet.sheet_name,
                                     sheet.header_row + sheet.header_rows - 1,
@@ -222,11 +230,15 @@ fn merge_appended<S: RowSink>(
                                     |row| {
                                         consume_append_row(
                                             sheet,
-                                            row.iter().map(CellValue::from_calamine).collect(),
+                                            row.into_iter()
+                                                .map(CellValue::from_calamine_owned)
+                                                .collect(),
                                             &row_mappings[sheet_index],
                                             options,
                                             plan,
                                             &mut dedup,
+                                            &filter,
+                                            &mut last_progress,
                                             sink,
                                             &mut current,
                                             total,
@@ -245,6 +257,8 @@ fn merge_appended<S: RowSink>(
                             options,
                             plan,
                             &mut dedup,
+                            &filter,
+                            &mut last_progress,
                             sink,
                             &mut current,
                             total,
@@ -271,6 +285,8 @@ fn merge_appended<S: RowSink>(
                                         options,
                                         plan,
                                         &mut dedup,
+                                        &filter,
+                                        &mut last_progress,
                                         sink,
                                         &mut current,
                                         total,
@@ -287,6 +303,8 @@ fn merge_appended<S: RowSink>(
                             options,
                             plan,
                             &mut dedup,
+                            &filter,
+                            &mut last_progress,
                             sink,
                             &mut current,
                             total,
@@ -309,7 +327,9 @@ fn merge_fallback_workbook<S: RowSink>(
     row_mappings: &[RowMapping],
     options: &MergeOptions,
     plan: &OutputPlan,
-    dedup: &mut HashSet<Vec<String>>,
+    dedup: &mut Deduplicator,
+    filter: &RowFilter,
+    last_progress: &mut std::time::Instant,
     sink: &mut S,
     current: &mut u64,
     total: u64,
@@ -336,6 +356,8 @@ fn merge_fallback_workbook<S: RowSink>(
                     options,
                     plan,
                     dedup,
+                    filter,
+                    last_progress,
                     sink,
                     current,
                     total,
@@ -361,6 +383,8 @@ fn merge_fallback_workbook<S: RowSink>(
                 options,
                 plan,
                 dedup,
+                filter,
+                last_progress,
                 sink,
                 current,
                 total,
@@ -379,7 +403,9 @@ fn consume_append_row<S: RowSink>(
     row_mapping: &RowMapping,
     options: &MergeOptions,
     plan: &OutputPlan,
-    dedup: &mut HashSet<Vec<String>>,
+    dedup: &mut Deduplicator,
+    filter: &RowFilter,
+    last_progress: &mut std::time::Instant,
     sink: &mut S,
     current: &mut u64,
     total: u64,
@@ -393,18 +419,21 @@ fn consume_append_row<S: RowSink>(
         return Ok(());
     }
     let output_row = mapped_row(values, row_mapping, plan);
-    if !passes_filter(&output_row, plan, options) {
+    if !filter.accepts(&output_row) {
         return Ok(());
     }
-    if options.deduplicate {
-        let key = row_key(&output_row);
-        if !dedup.insert(key) {
-            return Ok(());
-        }
+    if options.deduplicate && !dedup.insert(&output_row)? {
+        return Ok(());
     }
     sink.write_row(&output_row)?;
     *current += 1;
-    send_progress(*current, total, table.display_name(), emit);
+    if current.is_multiple_of(1_000)
+        && last_progress.elapsed() >= std::time::Duration::from_millis(100)
+        || *current == total
+    {
+        *last_progress = std::time::Instant::now();
+        send_progress(*current, total, row_mapping.label.clone(), emit);
+    }
     Ok(())
 }
 

@@ -29,6 +29,7 @@ pub(super) struct XlsxSink {
     workbook: Workbook,
     plan: OutputPlan,
     header_format: Format,
+    datetime_formats: [Format; 5],
     current_sheet: usize,
     row_in_sheet: u32,
     max_data_rows: u32,
@@ -56,6 +57,14 @@ impl XlsxSink {
             workbook: Workbook::new(),
             plan,
             header_format,
+            datetime_formats: [
+                "yyyy-mm-dd",
+                "yyyy-mm-dd hh:mm:ss",
+                "yyyy-mm-dd hh:mm:ss.000",
+                "hh:mm:ss",
+                "hh:mm:ss.000",
+            ]
+            .map(|pattern| Format::new().set_num_format(pattern)),
             current_sheet: 0,
             row_in_sheet: 0,
             max_data_rows,
@@ -63,6 +72,11 @@ impl XlsxSink {
         };
         sink.add_sheet()?;
         Ok(sink)
+    }
+    #[cfg(test)]
+    pub(super) fn set_fast_compression(&mut self, enabled: bool) {
+        self.workbook
+            .set_zip_compression_level(if enabled { 3 } else { 6 });
     }
     fn add_sheet(&mut self) -> Result<()> {
         let index = self.workbook.worksheets().len();
@@ -128,17 +142,17 @@ impl XlsxSink {
                         f64::from(*second) + f64::from(*millisecond) / 1000.0,
                     )?;
                     let format = if *millisecond > 0 {
-                        Format::new().set_num_format("yyyy-mm-dd hh:mm:ss.000")
+                        &self.datetime_formats[2]
                     } else if *hour == 0 && *minute == 0 && *second == 0 {
-                        Format::new().set_num_format("yyyy-mm-dd")
+                        &self.datetime_formats[0]
                     } else {
-                        Format::new().set_num_format("yyyy-mm-dd hh:mm:ss")
+                        &self.datetime_formats[1]
                     };
                     worksheet.write_datetime_with_format(
                         excel_row,
                         column as u16,
                         &datetime,
-                        &format,
+                        format,
                     )?;
                 }
                 CellValue::Time {
@@ -156,11 +170,7 @@ impl XlsxSink {
                         excel_row,
                         column as u16,
                         &time,
-                        &Format::new().set_num_format(if *millisecond > 0 {
-                            "hh:mm:ss.000"
-                        } else {
-                            "hh:mm:ss"
-                        }),
+                        &self.datetime_formats[if *millisecond > 0 { 4 } else { 3 }],
                     )?;
                 }
             }

@@ -1,0 +1,89 @@
+[
+  {
+    "name": "csv_1k_16",
+    "kind": "csv",
+    "rows": 1000,
+    "cols": 16
+  },
+  {
+    "name": "csv_10k_64",
+    "kind": "csv",
+    "rows": 10000,
+    "cols": 64
+  },
+  {
+    "name": "csv_1m_16",
+    "kind": "csv",
+    "rows": 1000000,
+    "cols": 16
+  },
+  {
+    "name": "csv_gbk_100k_64",
+    "kind": "csv",
+    "rows": 100000,
+    "cols": 64,
+    "gbk": true
+  },
+  {
+    "name": "xlsx_inline_1m_16",
+    "kind": "xlsx",
+    "rows": 1000000,
+    "cols": 16
+  },
+  {
+    "name": "xlsx_shared_100k_64",
+    "kind": "xlsx",
+    "rows": 100000,
+    "cols": 64,
+    "shared": true
+  },
+  {
+    "name": "xlsx_inline_10k_512",
+    "kind": "xlsx",
+    "rows": 10000,
+    "cols": 512
+  },
+  {
+    "name": "xlsx_shared_10k_256",
+    "kind": "xlsx",
+    "rows": 10000,
+    "cols": 256,
+    "shared": true
+  },
+  {
+    "name": "xlsx_offset_8sheets_10k_64",
+    "kind": "xlsx",
+    "rows": 10000,
+    "cols": 64,
+    "sheets": 8,
+    "offset": 3,
+    "title": true
+  },
+  {
+    "name": "csv_100files_1k_64",
+    "kind": "csv",
+    "rows": 1000,
+    "cols": 64,
+    "files": 100,
+    "heterogeneous": true
+  },
+  {
+    "name": "csv_10m_8",
+    "kind": "csv",
+    "rows": 10000000,
+    "cols": 8
+  },
+  {
+    "name": "csv_numeric_edges_100k_64",
+    "kind": "csv",
+    "rows": 100000,
+    "cols": 64
+  },
+  {
+    "name": "xlsx_numeric_edges_100k_64",
+    "kind": "xlsx",
+    "rows": 100000,
+    "cols": 64,
+    "shared": true
+  }
+]

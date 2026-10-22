@@ -68,8 +68,8 @@ test("输出预览展示来源分组及抽样提示", async () => {
 
   assert.match(preview, /MergedPreviewGrid/);
   assert.match(preview, /每张表显示前 5 行/);
-  assert.match(grid, /label="来源表名"/);
-  assert.match(grid, /label="来源 Sheet"/);
+  assert.match(grid, /title: "来源表名"/);
+  assert.match(grid, /title: "来源 Sheet"/);
   assert.match(grid, /sf-merged-preview-group-start/);
   assert.match(grid, /:row-class-name="rowClassName"/);
   assert.doesNotMatch(grid, /sf-merged-preview-heading/);

@@ -76,6 +76,7 @@ export interface NativeCommands {
     {
       table: T.SourceTable;
       limit: number;
+      refresh?: boolean;
     },
     T.PreviewTable
   >;

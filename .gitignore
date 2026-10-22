@@ -11,3 +11,6 @@
 .mimosa/
 
 .zcode/
+
+__pycache__/
+!docs/benchmarks/*-summary.csv

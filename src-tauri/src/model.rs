@@ -85,6 +85,9 @@ pub struct MergeOptions {
     pub output_order: Vec<String>,
     #[serde(default)]
     pub deduplicate: bool,
+    #[cfg(test)]
+    #[serde(default)]
+    pub fast_xlsx: bool,
     #[serde(default)]
     pub filter_column: String,
     #[serde(default)]
@@ -101,6 +104,8 @@ impl Default for MergeOptions {
             include_source_sheet: false,
             output_order: Vec::new(),
             deduplicate: false,
+            #[cfg(test)]
+            fast_xlsx: false,
             filter_column: String::new(),
             filter_text: String::new(),
             filter_exclude: false,

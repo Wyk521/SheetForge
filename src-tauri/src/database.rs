@@ -202,3 +202,6 @@ mod tests {
         assert!(validate_profile(&profile).is_err());
     }
 }
+
+#[cfg(test)]
+mod performance_matrix;

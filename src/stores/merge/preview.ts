@@ -59,7 +59,9 @@ export function createPreviewActions(
   let sourcePreviewRequest = 0;
   let mergedPreviewRequest = 0;
   let previewedSource: SourceTable | null = null;
-  const sourceCache = new Map<SourceTable, { key: string; preview: PreviewTable }>();
+  const sourceCache = new Map<SourceTable, { key: string; preview: PreviewTable; bytes: number }>();
+  const previewBytes = (result: PreviewTable) => 1024 + result.headers.reduce((n, s) => n + 48 + s.length * 2, 0)
+    + result.rows.reduce((n, row) => n + 32 + row.reduce((size, s) => size + 48 + s.length * 2, 0), 0);
   const sourceReads = new Map<SourceTable, { key: string; promise: Promise<PreviewTable> }>();
   const previewKey = (table: SourceTable) => JSON.stringify([
     table.path, table.sheet_name, table.kind, table.header_row, table.header_rows, table.headers,
@@ -78,16 +80,41 @@ export function createPreviewActions(
     },
     { flush: "sync" },
   );
+  let activeReads = 0;
+  const queuedReads: { valid: () => boolean; start: () => void; skip: () => void }[] = [];
+  function drainReads() {
+    while (activeReads < 2 && queuedReads.length) {
+      const job = queuedReads.shift()!;
+      if (job.valid()) job.start();
+      else job.skip();
+    }
+  }
+  function limitedRead(table: SourceTable, force: boolean, valid: () => boolean) {
+    return new Promise<PreviewTable>((resolve, reject) => {
+      const start = () => {
+        activeReads += 1;
+        let read: Promise<PreviewTable>;
+        try { read = invoke("preview_source", { table, limit: 30, ...(force ? { refresh: true } : {}) }); }
+        catch (error) { activeReads -= 1; reject(error); drainReads(); return; }
+        void read.then(resolve, reject).finally(() => { activeReads -= 1; drainReads(); });
+      };
+      if (activeReads < 2) start();
+      else queuedReads.push({ valid, start, skip: () => reject(new Error("预览已切换")) });
+    });
+  }
   function readSourcePreview(table: SourceTable, key: string, force: boolean) {
     const pending = sourceReads.get(table);
     if (!force && pending?.key === key) return pending.promise;
-    const promise = invoke("preview_source", { table, limit: 30 }).then((result) => {
+    const promise: Promise<PreviewTable> = limitedRead(table, force, () => previewedSource === table && previewKey(table) === key
+      && sourceReads.get(table)?.promise === promise).then((result) => {
       if (sourceReads.get(table)?.promise === promise && sources.value.includes(table)
         && previewKey(table) === key) {
         sourceCache.delete(table);
-        sourceCache.set(table, { key, preview: result });
+        sourceCache.set(table, { key, preview: result, bytes: previewBytes(result) });
         // 仅保留最近打开的 16 张表，每张缓存前 30 行，不随时间过期。
-        if (sourceCache.size > 16) sourceCache.delete(sourceCache.keys().next().value!);
+        while (sourceCache.size > 16 || [...sourceCache.values()].reduce((n, entry) => n + entry.bytes, 0) > 32 * 1024 * 1024) {
+          sourceCache.delete(sourceCache.keys().next().value!);
+        }
       }
       return result;
     }).finally(() => {
@@ -137,6 +164,7 @@ export function createPreviewActions(
       sourcePreviewTitle.value = `${displayName(table)} · 前 ${result.rows.length} 行`;
     } catch (error) {
       if (request !== sourcePreviewRequest) return;
+      if (previewKey(table) !== key) { closeSourcePreview(); return; }
       sourcePreviewVisible.value = false;
       ElMessage.error(`预览失败：${error}`);
     } finally {

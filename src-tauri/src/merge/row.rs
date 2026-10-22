@@ -16,6 +16,7 @@ pub(super) struct RowMapping {
     columns: Vec<(usize, usize, TransformOp, bool)>,
     source_file: Option<String>,
     source_sheet: Option<String>,
+    pub(super) label: String,
 }
 
 pub(super) fn build_row_mapping(
@@ -58,6 +59,7 @@ pub(super) fn build_row_mapping(
         .collect();
 
     RowMapping {
+        label: table.display_name(),
         columns,
         source_file: plan.source_file_column.map(|_| {
             table
@@ -109,34 +111,50 @@ pub(crate) fn preview_mapped_row(
     }
     let mapping = build_row_mapping(table, plan, options.mode);
     let output = mapped_row(source, &mapping, plan);
-    passes_filter(&output, plan, options).then(|| row_key(&output))
+    RowFilter::new(plan, options)
+        .accepts(&output)
+        .then(|| row_key(&output))
 }
 
 pub(super) fn row_key(row: &[CellValue]) -> Vec<String> {
     row.iter().map(CellValue::as_text).collect()
 }
 
-pub(super) fn passes_filter(row: &[CellValue], plan: &OutputPlan, options: &MergeOptions) -> bool {
-    if options.filter_text.is_empty() {
-        return true;
+pub(super) struct RowFilter {
+    column: Option<usize>,
+    needle: String,
+    exclude: bool,
+}
+impl RowFilter {
+    pub(super) fn new(plan: &OutputPlan, options: &MergeOptions) -> Self {
+        let key = header_key(&options.filter_column);
+        let column = (!options.filter_text.is_empty())
+            .then(|| {
+                plan.headers
+                    .iter()
+                    .position(|header| header_key(header) == key)
+            })
+            .flatten();
+        Self {
+            column,
+            needle: options.filter_text.to_lowercase(),
+            exclude: options.filter_exclude,
+        }
     }
-    let Some(index) = plan
-        .headers
-        .iter()
-        .position(|header| header_key(header) == header_key(&options.filter_column))
-    else {
-        return true;
-    };
-    let contains = row
-        .get(index)
-        .map(CellValue::as_text)
-        .unwrap_or_default()
-        .to_lowercase()
-        .contains(&options.filter_text.to_lowercase());
-    if options.filter_exclude {
-        !contains
-    } else {
-        contains
+    pub(super) fn accepts(&self, row: &[CellValue]) -> bool {
+        let Some(column) = self.column else {
+            return true;
+        };
+        let value = row
+            .get(column)
+            .and_then(|value| value.copy_text(false))
+            .unwrap_or_default();
+        let contains = value.to_lowercase().contains(&self.needle);
+        if self.exclude {
+            !contains
+        } else {
+            contains
+        }
     }
 }
 
@@ -232,6 +250,13 @@ impl CellValue {
                 Self::Text(operation.apply(value))
             }
             other => other.clone(),
+        }
+    }
+    pub(crate) fn from_calamine_owned(value: Data) -> Self {
+        match value {
+            Data::String(value) => Self::Text(value),
+            Data::DateTimeIso(value) | Data::DurationIso(value) => Self::Text(value),
+            other => Self::from_calamine(&other),
         }
     }
     pub(crate) fn from_calamine(value: &Data) -> Self {

@@ -1,8 +1,9 @@
-import { ref, computed } from "vue";
+import { ref, computed, type ComputedRef } from "vue";
 import { invoke } from "../../native";
 import {
   defaultOptions,
   type ColumnMapping,
+  type SourceTable,
   type MergeOptions,
   type TransformOp,
 } from "../../types";
@@ -37,79 +38,57 @@ export function createMappingActions(
     invalidateResults,
   } = context;
   let planRequest = 0;
-  const fieldGroups = computed<FieldGroup[]>(() => {
-    const byKey = new Map<
-      string,
-      {
-        id: string;
-        key: string;
-        tables: FieldGroupSource[];
-        targets: Map<string, string>;
-        enables: Set<boolean>;
-        transforms: Set<TransformOp>;
-      }
-    >();
-    for (const [index, table] of sources.value.entries()) {
-      if (!table.enabled) continue;
-      for (const [mappingIndex, mapping] of table.mappings.entries()) {
-        // 同名来源只有在目标也相同时才属于一组，拆出后所有批量操作都按组隔离。
-        const key = JSON.stringify([headerKey(mapping.source_name), headerKey(mapping.target_name)]);
-        let group = byKey.get(key);
-        if (!group) {
-          group = {
-            id: key,
-            key: mapping.source_name.trim(),
-            tables: [],
-            targets: new Map(),
-            enables: new Set(),
-            transforms: new Set(),
-          };
-          byKey.set(key, group);
-        }
-        group.tables.push({
-          id: fieldSourceId(table, mapping, mappingIndex),
-          index,
-          name: displayName(table),
-          sourceIndex: mapping.source_index,
-          sourceName: mapping.source_name,
-          target: mapping.target_name,
+  interface Fragment {
+    key: string; name: string; target: string; targetKey: string;
+    enabled: boolean; transform: TransformOp; source: FieldGroupSource;
+  }
+  const fragments = new WeakMap<SourceTable, { index: number; value: ComputedRef<Fragment[]> }>();
+  const collator = new Intl.Collator("zh");
+  function tableFragments(table: SourceTable, index: number) {
+    let cached = fragments.get(table);
+    if (!cached || cached.index !== index) {
+      cached = { index, value: computed(() => {
+        if (!table.enabled) return [];
+        const name = displayName(table);
+        return table.mappings.map((mapping, mappingIndex) => {
+          const target = mapping.target_name.trim();
+          const targetKey = headerKey(target);
+          return { key: JSON.stringify([headerKey(mapping.source_name), targetKey]),
+            name: mapping.source_name.trim(), target, targetKey, enabled: mapping.enabled,
+            transform: mapping.transform,
+            source: { id: fieldSourceId(table, mapping, mappingIndex), index, name,
+              sourceIndex: mapping.source_index, sourceName: mapping.source_name, target: mapping.target_name } };
         });
-        const target = mapping.target_name.trim();
-        group.targets.set(headerKey(target), target);
-        group.enables.add(mapping.enabled);
-        group.transforms.add(mapping.transform);
+      }) };
+      fragments.set(table, cached);
+    }
+    return cached.value.value;
+  }
+  const fieldGroups = computed<FieldGroup[]>(() => {
+    const outputPositions = new Map(planHeaders.value.map((header, index) => [headerKey(header), index]));
+    const byKey = new Map<string, { id: string; key: string; tables: FieldGroupSource[];
+      targets: Map<string, string>; enables: Set<boolean>; transforms: Set<TransformOp>; position: number; counts: Set<number> }>();
+    for (const [index, table] of sources.value.entries()) {
+      for (const item of tableFragments(table, index)) {
+        let group = byKey.get(item.key);
+        if (!group) {
+          group = { id: item.key, key: item.name, tables: [], targets: new Map(), enables: new Set(), transforms: new Set(),
+            position: outputPositions.get(item.targetKey) ?? Number.MAX_SAFE_INTEGER, counts: new Set() };
+          byKey.set(item.key, group);
+        }
+        group.tables.push(item.source);
+        group.counts.add(index);
+        group.targets.set(item.targetKey, item.target);
+        group.enables.add(item.enabled);
+        group.transforms.add(item.transform);
       }
     }
-    const outputPositions = new Map(
-      planHeaders.value.map((header, index) => [headerKey(header), index]),
-    );
-    const outputPosition = (value: string) =>
-      outputPositions.get(headerKey(value)) ?? Number.MAX_SAFE_INTEGER;
-    const groupPosition = (group: {
-      key: string;
-      targets: Map<string, string>;
-    }) =>
-      Math.min(
-        ...[...group.targets.values()].map((target) => outputPosition(target)),
-      );
     return [...byKey.values()]
-      .sort((a, b) => {
-        const position = groupPosition(a) - groupPosition(b);
-        return (
-          position ||
-          b.tables.length - a.tables.length ||
-          a.key.localeCompare(b.key, "zh")
-        );
-      })
-      .map((g) => ({
-        id: g.id,
-        key: g.key,
-        count: new Set(g.tables.map((source) => source.index)).size,
-        tables: g.tables,
+      .sort((a, b) => a.position - b.position || b.tables.length - a.tables.length || collator.compare(a.key, b.key))
+      .map(g => ({ id: g.id, key: g.key, count: g.counts.size, tables: g.tables,
         uniformTarget: g.targets.size === 1 ? [...g.targets.values()][0] : null,
         uniformEnabled: g.enables.size === 1 ? [...g.enables][0] : null,
-        uniformTransform: g.transforms.size === 1 ? [...g.transforms][0] : null,
-      }));
+        uniformTransform: g.transforms.size === 1 ? [...g.transforms][0] : null }));
   });
   async function refreshPlan() {
     const request = ++planRequest;
@@ -124,13 +103,28 @@ export function createMappingActions(
       if (request === planRequest) planHeaders.value = [];
     }
   }
+  let planScheduled = false;
+  function schedulePlan() {
+    invalidateResults();
+    // Immediately invalidate older in-flight replies, before the next microtask.
+    planRequest += 1;
+    if (planScheduled) return;
+    planScheduled = true;
+    queueMicrotask(() => { planScheduled = false; void refreshPlan(); });
+  }
   function setMode(mode: MergeOptions["mode"]) {
     options.value.mode = mode;
-    void refreshPlan();
+    schedulePlan();
   }
   function setAdvanced(patch: Partial<MergeOptions>) {
     Object.assign(options.value, patch);
-    void refreshPlan();
+    // These are the only options that can change output headers.
+    if (patch.mode !== undefined || patch.output_order !== undefined
+      || patch.include_source_file !== undefined || patch.include_source_sheet !== undefined) {
+      schedulePlan();
+    } else {
+      invalidateResults();
+    }
   }
   function updateOutputOrder(changes: { previous: string; next: string }[]) {
     if (options.value.output_order.length === 0) return;
@@ -172,7 +166,7 @@ export function createMappingActions(
     const target = Math.min(Math.max(index + direction, 0), headers.length - 1);
     [headers[index], headers[target]] = [headers[target], headers[index]];
     options.value.output_order = headers;
-    void refreshPlan();
+    schedulePlan();
   }
   function moveOutputColumnByName(name: string, direction: number) {
     const index = planHeaders.value.findIndex(
@@ -203,7 +197,7 @@ export function createMappingActions(
     const changes = mappings.map((mapping) => ({ previous: mapping.target_name, next: target }));
     for (const mapping of mappings) mapping.target_name = target;
     updateOutputOrder(changes);
-    void refreshPlan();
+    schedulePlan();
   }
   function setFieldTarget(id: string, target: string) {
     const group = fieldGroups.value.find((group) => group.id === id);
@@ -211,11 +205,11 @@ export function createMappingActions(
   }
   function setFieldEnabled(id: string, enabled: boolean) {
     for (const mapping of groupMappings(id)) mapping.enabled = enabled;
-    void refreshPlan();
+    schedulePlan();
   }
   function setFieldTransform(id: string, transform: TransformOp) {
     for (const mapping of groupMappings(id)) mapping.transform = transform;
-    void refreshPlan();
+    schedulePlan();
   }
   function resetField(id: string) {
     const mappings = groupMappings(id);
@@ -226,7 +220,7 @@ export function createMappingActions(
       mapping.transform = "None";
     }
     updateOutputOrder(changes);
-    void refreshPlan();
+    schedulePlan();
   }
   return {
     fieldGroups,
