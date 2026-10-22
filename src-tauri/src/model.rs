@@ -168,6 +168,37 @@ pub fn make_default_mappings(headers: &[String]) -> Vec<ColumnMapping> {
         .collect()
 }
 
+/// One active source column per target in each table; targets may be shared across tables.
+pub fn validate_mapping_targets(
+    tables: &[SourceTable],
+    options: &MergeOptions,
+) -> anyhow::Result<()> {
+    if options.mode != MergeMode::Manual {
+        return Ok(());
+    }
+    for table in tables.iter().filter(|table| table.enabled) {
+        let mut targets = HashMap::<String, &ColumnMapping>::new();
+        for mapping in table.mappings.iter().filter(|mapping| mapping.enabled) {
+            let key = header_key(&mapping.target_name);
+            if key.is_empty() {
+                continue;
+            }
+            if let Some(previous) = targets.insert(key, mapping) {
+                anyhow::bail!(
+                    "{}：第 {} 列「{}」与第 {} 列「{}」不能同时映射到「{}」",
+                    table.display_name(),
+                    previous.source_index + 1,
+                    previous.source_name,
+                    mapping.source_index + 1,
+                    mapping.source_name,
+                    mapping.target_name.trim()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn build_output_plan(tables: &[SourceTable], options: &MergeOptions) -> OutputPlan {
     let enabled: Vec<&SourceTable> = tables.iter().filter(|table| table.enabled).collect();
     let mut headers = match options.mode {

@@ -127,6 +127,61 @@ beforeEach(() => {
 });
 
 describe("字段规则和来源", () => {
+  it("同表不同列不能映射到相同目标，批量改名失败不留下部分修改", async () => {
+    const store = useMergeStore();
+    store.sources = [table("一.xlsx"), table("二.xlsx")];
+    store.sources[1].mappings[1].target_name = " 区\n县 ";
+    store.options.output_order = ["姓名", "金额", "区县"];
+    store.checkRan = true;
+    const before = JSON.stringify([store.sources, store.options]);
+    expect(store.setFieldTarget(groupId(store, "姓名"), "区县")).toBe(false);
+    await Promise.resolve();
+    expect(JSON.stringify([store.sources, store.options])).toBe(before);
+    expect(store.checkRan).toBe(true);
+    expect(called("get_plan")).toHaveLength(0);
+    expect(native.warning).toHaveBeenCalledWith(expect.stringContaining("第 2 列「金额」"));
+  });
+  it("按来源改名和多选拆分都校验同表占用及批次内部重复", () => {
+    const store = useMergeStore();
+    store.sources = [table()];
+    const ids = store.fieldGroups.flatMap((group) => group.tables.map((source) => source.id));
+    expect(store.setSourceFieldTargets([store.fieldGroups.find((group) => group.key === "姓名")!.tables[0].id], "金额")).toBe(false);
+    expect(store.setSourceFieldTargets(ids, "合并字段")).toBe(false);
+    expect(store.sources[0].mappings.map((mapping) => mapping.target_name)).toEqual(["姓名", "金额"]);
+  });
+  it("跨表异名字段允许使用同一目标，停用列不占用目标名", () => {
+    const store = useMergeStore();
+    store.sources = [table("一.xlsx"), table("二.xlsx")];
+    store.sources[1].mappings[0].source_name = "客户";
+    expect(store.setFieldTarget(groupId(store, "客户"), "姓名")).toBe(true);
+    store.setFieldEnabled(groupId(store, "金额"), false);
+    expect(store.setFieldTarget(groupId(store, "姓名"), "金额")).toBe(true);
+    expect(store.sources[0].mappings[0].target_name).toBe("金额");
+    expect(native.warning).not.toHaveBeenCalled();
+  });
+  it("重新启用和恢复字段遇到冲突时整批保持原样", () => {
+    const store = useMergeStore();
+    store.sources = [table("一.xlsx"), table("二.xlsx")];
+    store.setFieldEnabled(groupId(store, "金额"), false);
+    store.setFieldTarget(groupId(store, "金额"), "姓名");
+    expect(store.setFieldEnabled(groupId(store, "金额"), true)).toBe(false);
+    expect(store.sources.every((source) => !source.mappings[1].enabled)).toBe(true);
+    store.setFieldTarget(groupId(store, "金额"), "金额");
+    store.setFieldTarget(groupId(store, "姓名"), "金额");
+    const before = JSON.stringify([store.sources, store.options]);
+    expect(store.resetField(groupId(store, "金额"))).toBe(false);
+    expect(JSON.stringify([store.sources, store.options])).toBe(before);
+  });
+  it("旧方案的同表冲突会标记并允许逐列修复", () => {
+    const store = useMergeStore();
+    const source = table();
+    source.mappings[1].target_name = "姓名";
+    store.sources = [source];
+    expect(store.fieldGroups.every((group) => group.tables[0].conflict)).toBe(true);
+    const id = store.fieldGroups.find((group) => group.key === "金额")!.tables[0].id;
+    expect(store.setSourceFieldTargets([id], "金额")).toBe(true);
+    expect(store.fieldGroups.some((group) => group.tables.some((item) => item.conflict))).toBe(false);
+  });
   it("同名字段按来源拆开后，整组改名、启用、清洗和恢复只作用于当前组", () => {
     const store = useMergeStore();
     store.sources = [table("一.xlsx"), table("二.xlsx"), table("三.xlsx"),

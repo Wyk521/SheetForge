@@ -29,63 +29,58 @@ function onModeChange(mode: MergeMode) {
     </div>
 
     <div class="sf-merge-layout">
-      <!-- 左侧：高级选项 -->
+      <!-- 顶部：输出选项和行筛选 -->
       <div class="sf-merge-advanced">
-        <el-card shadow="never">
-          <div class="sf-option-stack">
-            <div class="sf-option-row">
-              <span>来源文件列</span>
-              <el-switch
-                :model-value="store.options.include_source_file"
-                aria-label="来源文件列"
-                @change="(v: boolean | string | number) => store.setAdvanced({ include_source_file: Boolean(v) })"
-              />
-            </div>
-            <div class="sf-option-row">
-              <span>来源工作表列</span>
-              <el-switch
-                :model-value="store.options.include_source_sheet"
-                aria-label="来源工作表列"
-                @change="(v: boolean | string | number) => store.setAdvanced({ include_source_sheet: Boolean(v) })"
-              />
-            </div>
-            <div class="sf-option-row">
-              <span>删除重复行</span>
-              <el-switch
-                :model-value="store.options.deduplicate"
-                aria-label="删除重复行"
-                @change="(v: boolean | string | number) => store.setAdvanced({ deduplicate: Boolean(v) })"
-              />
-            </div>
-          </div>
-        </el-card>
-
-        <el-card shadow="never">
-          <div class="sf-card-heading">行筛选</div>
-          <div class="sf-filter-row">
-            <el-input
-              :model-value="store.options.filter_column"
-              placeholder="字段名"
-              class="sf-filter-column"
-              @update:model-value="(v: string) => store.setAdvanced({ filter_column: v })"
-            />
-            <el-input
-              :model-value="store.options.filter_text"
-              placeholder="包含文本"
-              @update:model-value="(v: string) => store.setAdvanced({ filter_text: v })"
+        <div class="sf-option-stack">
+          <div class="sf-option-row">
+            <span>来源文件列</span>
+            <el-switch
+              :model-value="store.options.include_source_file"
+              aria-label="来源文件列"
+              @change="(v: boolean | string | number) => store.setAdvanced({ include_source_file: Boolean(v) })"
             />
           </div>
+          <div class="sf-option-row">
+            <span>来源工作表列</span>
+            <el-switch
+              :model-value="store.options.include_source_sheet"
+              aria-label="来源工作表列"
+              @change="(v: boolean | string | number) => store.setAdvanced({ include_source_sheet: Boolean(v) })"
+            />
+          </div>
+          <div class="sf-option-row">
+            <span>删除重复行</span>
+            <el-switch
+              :model-value="store.options.deduplicate"
+              aria-label="删除重复行"
+              @change="(v: boolean | string | number) => store.setAdvanced({ deduplicate: Boolean(v) })"
+            />
+          </div>
+        </div>
+        <div class="sf-filter-row">
+          <span class="sf-filter-label">行筛选</span>
+          <el-input
+            :model-value="store.options.filter_column"
+            placeholder="字段名"
+            class="sf-filter-column"
+            @update:model-value="(v: string) => store.setAdvanced({ filter_column: v })"
+          />
+          <el-input
+            :model-value="store.options.filter_text"
+            placeholder="包含文本"
+            class="sf-filter-text"
+            @update:model-value="(v: string) => store.setAdvanced({ filter_text: v })"
+          />
           <el-checkbox
             :model-value="store.options.filter_exclude"
             @change="(v: boolean | string | number) => store.setAdvanced({ filter_exclude: Boolean(v) })"
           >
-            排除匹配行
+            排除
           </el-checkbox>
-        </el-card>
-
+        </div>
       </div>
 
-      <!-- 右侧：字段映射与输出顺序 -->
+      <!-- 字段映射与输出顺序 -->
       <div class="sf-merge-mapping">
         <el-card shadow="never">
           <template v-if="mappingEnabled">
@@ -133,31 +128,36 @@ function onModeChange(mode: MergeMode) {
 
 <style scoped>
 .sf-merge-layout {
-  display: flex;
-  align-items: flex-start;
+  display: grid;
   gap: var(--space-md);
   min-width: 0;
 }
 
 .sf-merge-advanced {
+  --control-height: 32px;
   display: flex;
-  flex: 0 1 280px;
-  flex-direction: column;
-  gap: var(--space-sm);
-  min-width: 250px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs) var(--space-lg);
+  min-width: 0;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-control);
+  background: var(--color-paper-2);
 }
 
 .sf-option-stack {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-lg);
 }
 
 .sf-option-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-md);
+  gap: var(--space-xs);
   min-height: 2rem;
   font-size: var(--text-sm);
 }
@@ -174,8 +174,19 @@ function onModeChange(mode: MergeMode) {
 
 .sf-filter-row {
   display: flex;
+  align-items: center;
   gap: var(--space-xs);
-  margin-bottom: var(--space-xs);
+  min-width: 0;
+}
+
+.sf-filter-label {
+  flex-shrink: 0;
+  color: var(--sf-text-muted);
+  font-size: var(--text-xs);
+}
+
+.sf-filter-text {
+  width: 10rem;
 }
 
 .sf-filter-column {
@@ -219,10 +230,6 @@ function onModeChange(mode: MergeMode) {
 }
 
 @media (max-width: 1080px) {
-  .sf-merge-layout {
-    flex-direction: column;
-  }
-
   .sf-merge-advanced,
   .sf-merge-mapping {
     width: 100%;

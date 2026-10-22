@@ -1,5 +1,6 @@
 import { ref, computed, type ComputedRef } from "vue";
 import { invoke } from "../../native";
+import { ElMessage } from "element-plus";
 import {
   defaultOptions,
   type ColumnMapping,
@@ -50,6 +51,12 @@ export function createMappingActions(
       cached = { index, value: computed(() => {
         if (!table.enabled) return [];
         const name = displayName(table);
+        const targets = new Map<string, number>();
+        for (const mapping of table.mappings) {
+          if (!mapping.enabled) continue;
+          const key = headerKey(mapping.target_name);
+          if (key) targets.set(key, (targets.get(key) ?? 0) + 1);
+        }
         return table.mappings.map((mapping, mappingIndex) => {
           const target = mapping.target_name.trim();
           const targetKey = headerKey(target);
@@ -57,7 +64,8 @@ export function createMappingActions(
             name: mapping.source_name.trim(), target, targetKey, enabled: mapping.enabled,
             transform: mapping.transform,
             source: { id: fieldSourceId(table, mapping, mappingIndex), index, name,
-              sourceIndex: mapping.source_index, sourceName: mapping.source_name, target: mapping.target_name } };
+              sourceIndex: mapping.source_index, sourceName: mapping.source_name, target: mapping.target_name,
+              conflict: mapping.enabled && (targets.get(targetKey) ?? 0) > 1 } };
         });
       }) };
       fragments.set(table, cached);
@@ -189,23 +197,49 @@ export function createMappingActions(
     const group = fieldGroups.value.find((group) => group.id === id);
     return sourceMappings(group?.tables.map((source) => source.id) ?? []);
   }
+  // Validate the complete proposed batch before changing any mapping or output order.
+  function canApplyMappings(mappings: ColumnMapping[], patch: (mapping: ColumnMapping) => Partial<ColumnMapping>) {
+    const changes = new Map(mappings.map((mapping) => [mapping, patch(mapping)]));
+    for (const table of sources.value) {
+      if (!table.enabled || !table.mappings.some((mapping) => changes.has(mapping))) continue;
+      const targets = new Map<string, { mapping: ColumnMapping; changed: boolean }>();
+      for (const original of table.mappings) {
+        const proposed = { ...original, ...changes.get(original) };
+        if (!proposed.enabled) continue;
+        const key = headerKey(proposed.target_name);
+        if (!key) continue;
+        const previous = targets.get(key);
+        const changed = changes.has(original);
+        if (previous && (changed || previous.changed)) {
+          ElMessage.warning(`${displayName(table)}：第 ${previous.mapping.source_index + 1} 列「${previous.mapping.source_name}」与第 ${proposed.source_index + 1} 列「${proposed.source_name}」不能同时映射到「${proposed.target_name.trim()}」`);
+          return false;
+        }
+        targets.set(key, { mapping: proposed, changed });
+      }
+    }
+    return true;
+  }
   function setSourceFieldTargets(ids: string[], target: string) {
     target = target.trim();
-    if (!target) return;
+    if (!target) return false;
     const mappings = sourceMappings(ids);
-    if (!mappings.length) return;
+    if (!mappings.length || !canApplyMappings(mappings, () => ({ target_name: target }))) return false;
     const changes = mappings.map((mapping) => ({ previous: mapping.target_name, next: target }));
     for (const mapping of mappings) mapping.target_name = target;
     updateOutputOrder(changes);
     schedulePlan();
+    return true;
   }
   function setFieldTarget(id: string, target: string) {
     const group = fieldGroups.value.find((group) => group.id === id);
-    if (group) setSourceFieldTargets(group.tables.map((source) => source.id), target);
+    return group ? setSourceFieldTargets(group.tables.map((source) => source.id), target) : false;
   }
   function setFieldEnabled(id: string, enabled: boolean) {
-    for (const mapping of groupMappings(id)) mapping.enabled = enabled;
+    const mappings = groupMappings(id);
+    if (!canApplyMappings(mappings, () => ({ enabled }))) return false;
+    for (const mapping of mappings) mapping.enabled = enabled;
     schedulePlan();
+    return true;
   }
   function setFieldTransform(id: string, transform: TransformOp) {
     for (const mapping of groupMappings(id)) mapping.transform = transform;
@@ -213,6 +247,7 @@ export function createMappingActions(
   }
   function resetField(id: string) {
     const mappings = groupMappings(id);
+    if (!canApplyMappings(mappings, (mapping) => ({ target_name: mapping.source_name, enabled: true }))) return false;
     const changes = mappings.map((mapping) => ({ previous: mapping.target_name, next: mapping.source_name }));
     for (const mapping of mappings) {
       mapping.target_name = mapping.source_name;
@@ -221,6 +256,7 @@ export function createMappingActions(
     }
     updateOutputOrder(changes);
     schedulePlan();
+    return true;
   }
   return {
     fieldGroups,

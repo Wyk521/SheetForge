@@ -63,6 +63,58 @@ fn merge_and_read(tables: Vec<SourceTable>, options: MergeOptions) -> Vec<Vec<St
 }
 
 #[test]
+fn same_table_target_collision_is_rejected_before_reading_or_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut table = scan_csv(&dir, "区县.csv", "区县,区县名称\n001,西湖区\n");
+    table.mappings[1].target_name = " 区\n县 ".into();
+    let tables = [table.clone()];
+    let options = MergeOptions::default();
+    let output = dir.path().join("existing.xlsx");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    let cancel = AtomicBool::new(false);
+
+    let error = preview_merged(&tables, &options, 5)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("第 1 列「区县」与第 2 列「区县名称」"));
+    for database in [false, true] {
+        assert!(preflight_for_destination(&tables, &options, database)
+            .iter()
+            .any(|issue| {
+                matches!(issue.level, crate::inspect::IssueLevel::Error)
+                    && issue.title == "同表目标字段重复"
+            }));
+    }
+    assert!(merge_tables(&tables, &options, &output, &|_, _, _| {}, &cancel).is_err());
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+    let mut written = 0;
+    assert!(
+        crate::merge::stream_merged_cells(&tables, &options, &|_, _, _| {}, &cancel, |_| {
+            written += 1;
+            Ok(())
+        })
+        .is_err()
+    );
+    assert_eq!(written, 0);
+
+    // Intersection ignores manual mappings; disabled columns do not occupy a target.
+    assert!(preview_merged(
+        &tables,
+        &MergeOptions {
+            mode: MergeMode::Intersection,
+            ..options.clone()
+        },
+        5
+    )
+    .is_ok());
+    table.mappings[1].enabled = false;
+    assert_eq!(
+        merge_and_read(vec![table], options),
+        vec![vec!["区县"], vec!["001"]]
+    );
+}
+
+#[test]
 fn source_preview_command_reads_on_the_background_runtime() {
     let dir = tempfile::tempdir().unwrap();
     let table = scan_csv(&dir, "预览.csv", "姓名,金额\n张三,100\n李四,200\n");

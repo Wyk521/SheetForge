@@ -6,6 +6,7 @@ export interface FieldGroupSource {
   sourceIndex: number;
   sourceName: string;
   target: string;
+  conflict: boolean;
 }
 export interface FieldGroup {
   id: string;

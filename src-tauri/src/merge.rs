@@ -5,7 +5,9 @@ mod row;
 mod tasks;
 mod xlsx;
 
-use crate::model::{build_output_plan, MergeOptions, OutputPlan, SourceKind, SourceTable};
+use crate::model::{
+    build_output_plan, validate_mapping_targets, MergeOptions, OutputPlan, SourceKind, SourceTable,
+};
 use crate::scan::{
     for_each_csv_row, for_each_xlsx_source_row, is_markup_workbook, is_xlsx_path,
     open_detected_workbook, open_xlsx_workbook, read_markup_workbook,
@@ -148,6 +150,9 @@ fn merge_into_sink<S: RowSink>(
     emit: &dyn Fn(u64, u64, String),
     cancel: &AtomicBool,
 ) -> Result<Option<u64>> {
+    for table in tables {
+        validate_mapping_targets(std::slice::from_ref(*table), options)?;
+    }
     // 这些映射只依赖于表头和用户配置。之前每一行都会重新构建哈希表、
     // 规范化表头并查找转换规则，在百万行数据上会把纯粹的配置开销放大数亿次。
     let row_mappings = tables

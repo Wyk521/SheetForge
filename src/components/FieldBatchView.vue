@@ -47,7 +47,7 @@ function commitSourceTarget(source: FieldGroupSource, value: string) {
     ElMessage.warning("目标字段不能为空");
     return;
   }
-  store.setSourceFieldTargets([source.id], value);
+  if (!store.setSourceFieldTargets([source.id], value)) return;
   if (headerKey(value) !== headerKey(source.target)) store.onlyMultiField = false;
 }
 
@@ -80,7 +80,7 @@ function confirmSplit() {
     ElMessage.warning("请使用不同的目标字段名");
     return;
   }
-  store.setSourceFieldTargets(splitSources.value.map((source) => source.id), target);
+  if (!store.setSourceFieldTargets(splitSources.value.map((source) => source.id), target)) return;
   store.onlyMultiField = false;
   delete selectedSources[splitGroupId.value];
   splitVisible.value = false;
@@ -115,12 +115,12 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
       <el-checkbox v-model="store.onlyMultiField">只看多表字段</el-checkbox>
     </div>
     <div v-if="filteredGroups.length > 0" class="sf-field-table-wrap">
-      <el-table class="sf-field-table" :data="pagedGroups" row-key="id" size="small" border>
-      <el-table-column type="expand">
+      <el-table class="sf-field-table" :data="pagedGroups" row-key="id" size="small">
+      <el-table-column type="expand" width="40">
         <template #default="{ row }">
           <div class="sf-source-preview-list">
             <div class="sf-source-field-toolbar">
-              <span class="sf-source-preview-count">涉及 {{ row.count }} 张启用表</span>
+              <span class="sf-source-preview-count">{{ row.count }} 张表 · {{ row.tables.length }} 个来源字段</span>
               <el-button
                 v-if="row.tables.length > 1"
                 size="small"
@@ -130,13 +130,11 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
                 拆出并改名{{ selectedSources[row.id]?.length ? `（${selectedSources[row.id].length}）` : '' }}
               </el-button>
             </div>
-            <div class="sf-source-field-heading" aria-hidden="true">
-              <span></span><span>来源</span><span>目标字段</span><span></span>
-            </div>
             <div
               v-for="source in row.tables"
               :key="source.id"
               class="sf-source-preview-row"
+              :class="{ 'sf-source-preview-row-single': row.tables.length === 1, 'sf-source-preview-row-conflict': source.conflict }"
             >
               <el-checkbox
                 v-if="row.tables.length > 1"
@@ -145,11 +143,13 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
                 :aria-label="`选择来源：${source.name}`"
                 @change="(v: string | number | boolean) => toggleSource(row, source, Boolean(v))"
               />
-              <span v-else></span>
-              <span class="sf-source-preview-name" :title="`${source.name} · 第 ${source.sourceIndex + 1} 列`">
-                {{ source.name }} · 第 {{ source.sourceIndex + 1 }} 列
-              </span>
+              <div class="sf-source-preview-origin">
+                <span class="sf-source-preview-name" :title="source.name">{{ source.name }}</span>
+                <span class="sf-source-preview-column">第 {{ source.sourceIndex + 1 }} 列</span>
+                <span v-if="source.conflict" class="sf-mapping-conflict">同表目标重复</span>
+              </div>
               <el-input
+                v-if="row.tables.length > 1"
                 :model-value="sourceTargetDrafts[source.id] ?? source.target"
                 size="small"
                 :disabled="store.busy"
@@ -161,7 +161,7 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
                 class="sf-source-preview-action"
                 size="small"
                 type="primary"
-                plain
+                text
                 :disabled="store.busy"
                 title="预览源表"
                 @click.stop="store.showSourcePreview(source.index)"
@@ -175,14 +175,15 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
       <el-table-column label="源字段" min-width="140" show-overflow-tooltip>
         <template #default="{ row }">
           <span class="sf-field-name">{{ row.key }}</span>
+          <span v-if="row.tables.some((source: FieldGroupSource) => source.conflict)" class="sf-mapping-conflict" title="同一张表的多个启用列指向相同目标，请改名或停用其中一列">冲突</span>
         </template>
       </el-table-column>
-      <el-table-column label="涉及表数" width="100">
+      <el-table-column label="来源" width="72" align="center">
         <template #default="{ row }">
           <el-tag size="small" type="info">{{ row.count }} 张</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="顺序" width="82" align="center">
+      <el-table-column label="顺序" width="76" align="center">
         <template #default="{ row }">
           <el-button-group>
             <el-button
@@ -206,19 +207,20 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
           </el-button-group>
         </template>
       </el-table-column>
-      <el-table-column label="目标字段" min-width="160">
+      <el-table-column label="目标字段" min-width="180">
         <template #default="{ row }">
           <el-input
             :model-value="targetDrafts[row.id] ?? row.uniformTarget ?? ''"
             size="small"
             :disabled="store.busy"
             placeholder="目标字段"
+            :aria-label="`${row.key} 的目标字段`"
             @update:model-value="(v: string) => (targetDrafts[row.id] = v)"
             @change="(v: string) => commitTarget(row.id, v)"
           />
         </template>
       </el-table-column>
-      <el-table-column label="启用" width="90">
+      <el-table-column label="启用" width="56" align="center">
         <template #default="{ row }">
           <el-switch
             :model-value="row.uniformEnabled ?? false"
@@ -231,7 +233,7 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="清洗" width="120">
+      <el-table-column label="清洗" width="104">
         <template #default="{ row }">
           <el-select
             :model-value="row.uniformTransform ?? ''"
@@ -244,9 +246,9 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
           </el-select>
         </template>
       </el-table-column>
-      <el-table-column label="" width="70" align="center">
+      <el-table-column label="" width="60" align="center">
         <template #default="{ row }">
-          <el-button size="small" text type="danger" :disabled="store.busy" @click="store.resetField(row.id)">恢复</el-button>
+          <el-button size="small" text :disabled="store.busy" @click="store.resetField(row.id)">恢复</el-button>
         </template>
       </el-table-column>
       </el-table>
@@ -269,6 +271,7 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
 
 <style scoped>
 .sf-field-batch {
+  --control-height: 32px;
   min-width: 0;
 }
 
@@ -296,7 +299,9 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
   display: grid;
   row-gap: var(--space-xs);
   min-width: 0;
-  padding: var(--space-xs) var(--space-lg);
+  padding: var(--space-sm) var(--space-md) var(--space-sm) 40px;
+  background: var(--color-paper-2);
+  border-block: 1px solid var(--color-rule-2);
 }
 
 .sf-source-preview-count {
@@ -311,17 +316,15 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
   gap: var(--space-sm);
 }
 
-.sf-source-field-heading,
 .sf-source-preview-row {
   display: grid;
-  grid-template-columns: 1.5rem minmax(160px, 1fr) minmax(140px, 0.7fr) auto;
+  grid-template-columns: 20px minmax(0, 1fr) minmax(140px, 220px) 56px;
   align-items: center;
   gap: var(--space-xs);
 }
 
-.sf-source-field-heading {
-  color: var(--sf-text-muted);
-  font-size: var(--text-2xs);
+.sf-source-preview-row-single {
+  grid-template-columns: minmax(0, 1fr) 56px;
 }
 
 .sf-source-preview-row {
@@ -340,6 +343,57 @@ watch(() => filteredGroups.value.length, length => { page.value = Math.min(page.
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sf-source-preview-origin {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.sf-source-preview-column {
+  flex-shrink: 0;
+  color: var(--sf-text-muted);
+  font-size: var(--text-2xs);
+}
+
+.sf-mapping-conflict {
+  margin-left: var(--space-xs);
+  color: var(--color-error);
+  font-size: var(--text-2xs);
+}
+
+.sf-field-table :deep(.el-table__expanded-cell) {
+  padding: 0;
+}
+
+.sf-field-table :deep(.el-input__inner) {
+  height: 30px;
+}
+
+.sf-field-table :deep(.el-table__cell) {
+  padding-block: 7px;
+}
+
+.sf-field-table :deep(.el-button.is-text) {
+  padding-inline: 6px;
+}
+
+.sf-field-table :deep(.el-button-group) {
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.sf-field-table :deep(.el-button-group .el-button) {
+  width: 24px;
+  min-height: 28px;
+  padding: 0;
+}
+
+.sf-source-preview-row-conflict {
+  border-left: 2px solid var(--color-error);
+  padding-left: var(--space-xs);
 }
 
 .sf-source-preview-action {

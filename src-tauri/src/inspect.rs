@@ -1,5 +1,7 @@
 use crate::merge::{preview_mapped_row, CellValue};
-use crate::model::{build_output_plan, header_key, MergeOptions, SourceKind, SourceTable};
+use crate::model::{
+    build_output_plan, header_key, validate_mapping_targets, MergeOptions, SourceKind, SourceTable,
+};
 use crate::scan::{
     csv_encoding, decode_csv_field, for_each_xlsx_preview_row, is_markup_workbook, is_xlsx_path,
     open_detected_workbook, open_xlsx_workbook, read_markup_workbook,
@@ -254,6 +256,7 @@ pub fn preview_merged(
     options: &MergeOptions,
     limit: usize,
 ) -> Result<MergedPreview> {
+    validate_mapping_targets(tables, options)?;
     let plan = build_output_plan(tables, options);
     let mut groups = Vec::new();
     let mut seen = HashSet::new();
@@ -321,6 +324,13 @@ pub fn preflight_for_destination(
         .filter(|table| table.enabled)
         .collect::<Vec<_>>();
     let mut issues = Vec::new();
+    if let Err(error) = validate_mapping_targets(tables, options) {
+        issues.push(issue(
+            IssueLevel::Error,
+            "同表目标字段重复",
+            &error.to_string(),
+        ));
+    }
     if enabled.is_empty() {
         issues.push(issue(
             IssueLevel::Error,
